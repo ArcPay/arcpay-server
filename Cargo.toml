@@ -1,0 +1,26 @@
+[package]
+name = "merklers"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+pmtree = { git = "https://github.com/0xbok/pmtree", rev = "046063997f4f964b593d237ee30b3cc362497a53" }
+utils = { git = "https://github.com/vacp2p/zerokit.git", rev = "be88a432d7ac58d02371025f909ba087d0a013c0" }
+rln = { git = "https://github.com/vacp2p/zerokit.git", rev = "be88a432d7ac58d02371025f909ba087d0a013c0" }
+async-graphql = "5.0.10"
+tokio = { version = "1", features = ["full"] }
+axum = "0.6.18"
+async-graphql-axum = "5.0.10"
+serde = "1.0.164"
+futures = "0.3.28"
+secp256k1 = "0.27.0"
+sha3 = "0.10.8"
+tokio-postgres = "0.7.8"
+lapin = "2.2.1"
+futures-lite = "1.13.0"
+num-bigint = "0.4.3"
+pg_bigdecimal = { version = "0.1.5", features = ["serde"] }
+serde_bytes = "0.11.11"
+serde_json = "1.0.100"
