@@ -40,17 +40,6 @@ enum MerkleCommand {
     Load
 }
 
-fn to_bytes_vec(from: PgNumeric) -> Vec<u8> {
-    let n = from.n.unwrap();
-    println!("{}", n.to_string());
-    assert!(n.is_integer());
-    let (num, scale) = n.as_bigint_and_exponent();
-    assert_eq!(scale, 0);
-    let buint = num.to_biguint().unwrap();
-    let vec = buint.to_bytes_be();
-    vec
-}
-
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();

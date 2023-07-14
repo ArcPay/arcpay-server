@@ -9,8 +9,6 @@ use rln::circuit::Fr as Fp;
 use tokio_postgres::Client;
 
 
-use crate::to_bytes_vec;
-
 /// If we want different parameters to be stored at the time of new,load and get,put:
 /// create a new struct `PostgresDB` and impl Database for PostgresDB.
 pub(crate) struct PostgresDBConfig {
@@ -115,4 +113,15 @@ impl Hasher for MyPoseidon {
     fn hash(input: &[Self::Fr]) -> Self::Fr {
         <PoseidonHash as utils::merkle_tree::Hasher>::hash(input)
     }
+}
+
+fn to_bytes_vec(from: PgNumeric) -> Vec<u8> {
+    let n = from.n.unwrap();
+    println!("{}", n.to_string());
+    assert!(n.is_integer());
+    let (num, scale) = n.as_bigint_and_exponent();
+    assert_eq!(scale, 0);
+    let buint = num.to_biguint().unwrap();
+    let vec = buint.to_bytes_be();
+    vec
 }
