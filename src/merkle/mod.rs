@@ -3,7 +3,7 @@ use num_bigint::BigInt;
 use pg_bigdecimal::{PgNumeric, BigDecimal};
 use pmtree::PmtreeErrorKind::DatabaseError;
 use std::collections::HashMap;
-use pmtree::{MerkleTree, DBKey, Value, PmtreeResult, DatabaseErrorKind, Database, Hasher};
+use pmtree::{DBKey, Value, PmtreeResult, DatabaseErrorKind, Database, Hasher};
 use rln::{hashers::PoseidonHash, utils::{fr_to_bytes_be, bytes_be_to_fr}};
 use rln::circuit::Fr as Fp;
 use tokio_postgres::Client;
@@ -115,17 +115,4 @@ impl Hasher for MyPoseidon {
     fn hash(input: &[Self::Fr]) -> Self::Fr {
         <PoseidonHash as utils::merkle_tree::Hasher>::hash(input)
     }
-}
-
-pub(crate) async fn get_new_merkle_tree(
-    depth: usize,
-    client: Client,
-    tablename: String,
-) -> MerkleTree<PostgresDBConfig, MyPoseidon> {
-    MerkleTree::<PostgresDBConfig, MyPoseidon>::new(
-        depth,
-        PostgresDBConfig {
-            client,
-            tablename,
-        }).await.unwrap()
 }
