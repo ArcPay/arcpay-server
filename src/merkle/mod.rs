@@ -2,7 +2,8 @@ use async_graphql::async_trait::async_trait;
 use num_bigint::BigInt;
 use pg_bigdecimal::{PgNumeric, BigDecimal};
 use pmtree::PmtreeErrorKind::DatabaseError;
-use std::collections::HashMap;
+use tokio::sync::RwLock;
+use std::{collections::HashMap, sync::Arc};
 use pmtree::{DBKey, Value, PmtreeResult, DatabaseErrorKind, Database, Hasher};
 use rln::{hashers::PoseidonHash, utils::{fr_to_bytes_be, bytes_be_to_fr}};
 use rln::circuit::Fr as Fp;
@@ -12,7 +13,7 @@ use tokio_postgres::Client;
 /// If we want different parameters to be stored at the time of new,load and get,put:
 /// create a new struct `PostgresDB` and impl Database for PostgresDB.
 pub(crate) struct PostgresDBConfig {
-    pub client: Client,
+    pub client: Arc<RwLock<Client>>,
     pub tablename: String,
 }
 
@@ -21,17 +22,20 @@ impl Database for PostgresDBConfig {
     type Config = PostgresDBConfig;
 
     async fn new(db_config: PostgresDBConfig) -> PmtreeResult<Self> {
-        let query = format!("CREATE TABLE {} (
-            leaf NUMERIC(78,0) NOT NULL,
-            index NUMERIC(20,0) NOT NULL,
-            PRIMARY KEY (index)
-        );", db_config.tablename);
+        {
+            let query = format!("CREATE TABLE {} (
+                leaf NUMERIC(78,0) NOT NULL,
+                index NUMERIC(20,0) NOT NULL,
+                PRIMARY KEY (index)
+            );", db_config.tablename);
 
-        let statement = db_config.client.prepare(&query).await.unwrap();
+            let client = db_config.client.read().await;
 
-        db_config.client.execute(&statement, &[]).await.unwrap();
+            let statement = client.prepare(&query).await.unwrap();
+            client.execute(&statement, &[]).await.unwrap();
+        }
 
-        Ok(PostgresDBConfig { client: db_config.client, tablename: db_config.tablename })
+        Ok(db_config)
     }
 
     async fn load(db_config: PostgresDBConfig) -> PmtreeResult<Self> {
@@ -45,7 +49,9 @@ impl Database for PostgresDBConfig {
 
         let query = format!("SELECT leaf FROM {} WHERE index=$1", self.tablename);
 
-        let rows = self.client.query(&query, &[&index]).await.unwrap();
+        let client = self.client.read().await;
+
+        let rows = client.query(&query, &[&index]).await.unwrap();
         dbg!(&rows);
         dbg!(rows.len());
         assert!(rows.len() <= 1, "key should be unique");
@@ -72,7 +78,9 @@ impl Database for PostgresDBConfig {
             self.tablename
         );
 
-        let rows_modified = self.client.execute(&query, &[&leaf, &index]).await.unwrap();
+        let client = self.client.write().await;
+
+        let rows_modified = client.execute(&query, &[&leaf, &index]).await.unwrap();
         assert_eq!(rows_modified, 1, "should be only 1 new row");
         Ok(())
     }

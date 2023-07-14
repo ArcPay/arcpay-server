@@ -2515,7 +2515,6 @@ dependencies = [
  "axum",
  "clap 4.3.11",
  "ethers-providers",
- "futures",
  "futures-lite",
  "lapin",
  "num-bigint",
