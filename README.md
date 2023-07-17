@@ -18,12 +18,12 @@
     PRIMARY KEY (index)
   );
   ```
-  Terminate the process, and run `cargo run -- --merkle load` and proceed to next section.
+- If you have already set up these DB tables previously, the command will terminate with an error. In that case, run `cargo run -- --merkle load` to set up connection to the DB.
 
 ## GraphQL server setup
 reference for graphql server: https://oliverjumpertz.com/how-to-build-a-powerful-graphql-api-with-rust/
 
-- run `cargo run -- --merkle load` and launch `localhost:8080`.
+- `cargo run -- --merkle <OPTION>` also launches a GraphQL server. Launch `localhost:8080` to see its interface.
 
 - Execute the query:
   ```
