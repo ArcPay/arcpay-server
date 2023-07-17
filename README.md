@@ -3,26 +3,27 @@
 - Create a local rabbitMQ server with default settings:
   - Should be accessible at `amqp://guest:guest@localhost:5672`.
   - You can open `http://localhost:15672/` and use `guest` as username & password.
+- Run `cargo run -- --rabbitmq` to send and receive messages to this queue.
 
 ## Postgres DB setup
 - Install postgresql locally.
 - Run `psql`.
 - Create a user `dev` to manage db.
 - Create arcpay database which will host all our tables: `create databse arcpay`.
-- Run `cargo run -- new` to create a `test` table with configuration:
+- Run `cargo run -- --merkle new` to create a `test` table with configuration:
   ```sql
-  CREATE TABLE state_tree (
+  CREATE TABLE test (
     leaf NUMERIC(78,0) NOT NULL, -- 32 bytes
     index NUMERIC(10,0) NOT NULL, -- 5 bytes
     PRIMARY KEY (index)
   );
   ```
-  Terminate the process, and run `cargo run -- load` and proceed to next section.
+- If you have already set up these DB tables previously, the command will terminate with an error. In that case, run `cargo run -- --merkle load` to set up connection to the DB.
 
 ## GraphQL server setup
 reference for graphql server: https://oliverjumpertz.com/how-to-build-a-powerful-graphql-api-with-rust/
 
-- run `cargo run -- load` and launch `localhost:8080`.
+- `cargo run -- --merkle <OPTION>` also launches a GraphQL server. Launch `localhost:8080` to see its interface.
 
 - Execute the query:
   ```

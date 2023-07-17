@@ -3,13 +3,11 @@ use num_bigint::BigInt;
 use pg_bigdecimal::{PgNumeric, BigDecimal};
 use pmtree::PmtreeErrorKind::DatabaseError;
 use std::collections::HashMap;
-use pmtree::{MerkleTree, DBKey, Value, PmtreeResult, DatabaseErrorKind, Database, Hasher};
+use pmtree::{DBKey, Value, PmtreeResult, DatabaseErrorKind, Database, Hasher};
 use rln::{hashers::PoseidonHash, utils::{fr_to_bytes_be, bytes_be_to_fr}};
 use rln::circuit::Fr as Fp;
 use tokio_postgres::Client;
 
-
-use crate::to_bytes_vec;
 
 /// If we want different parameters to be stored at the time of new,load and get,put:
 /// create a new struct `PostgresDB` and impl Database for PostgresDB.
@@ -117,15 +115,13 @@ impl Hasher for MyPoseidon {
     }
 }
 
-pub(crate) async fn get_new_merkle_tree(
-    depth: usize,
-    client: Client,
-    tablename: String,
-) -> MerkleTree<PostgresDBConfig, MyPoseidon> {
-    MerkleTree::<PostgresDBConfig, MyPoseidon>::new(
-        depth,
-        PostgresDBConfig {
-            client,
-            tablename,
-        }).await.unwrap()
+fn to_bytes_vec(from: PgNumeric) -> Vec<u8> {
+    let n = from.n.unwrap();
+    println!("{}", n.to_string());
+    assert!(n.is_integer());
+    let (num, scale) = n.as_bigint_and_exponent();
+    assert_eq!(scale, 0);
+    let buint = num.to_biguint().unwrap();
+    let vec = buint.to_bytes_be();
+    vec
 }
