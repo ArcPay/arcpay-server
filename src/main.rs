@@ -3,7 +3,7 @@ use ethers_providers::{Provider, Http, Middleware};
 use futures_lite::stream::StreamExt;
 
 use axum::{extract::Extension, routing::get, Router, Server};
-use lapin::publisher_confirm::Confirmation;
+use lapin::Channel;
 use tokio_postgres::NoTls;
 use user_balance::UserBalanceConfig;
 
@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use model::MutationRoot;
 
 use lapin::{
-    options::*, types::FieldTable, BasicProperties, Connection, ConnectionProperties,
+    options::*, types::FieldTable, Connection, ConnectionProperties,
 };
 
 use clap::Parser;
@@ -26,10 +26,6 @@ mod user_balance;
 
 #[derive(Parser, Debug)]
 struct Cli {
-    /// Connect to a rabbitmq instance
-    #[arg(long, action=clap::ArgAction::SetTrue)]
-    rabbitmq: bool,
-
     /// Create or load a merkle tree
     #[arg(long)]
     merkle: Option<MerkleCommand>,
@@ -41,9 +37,10 @@ enum MerkleCommand {
     Load
 }
 
-struct DBContext {
+struct ApiContext {
     user_balance_db: UserBalanceConfig,
     mt: Arc<RwLock<MerkleTree<PostgresDBConfig, MyPoseidon>>>,
+    channel: Channel,
 }
 
 #[tokio::main]
@@ -51,61 +48,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     //////////////// experimental RabbitMQ integration ////////////////
-    if cli.rabbitmq {
-        // Connect to the RabbitMQ server
-        let addr = "amqp://guest:guest@localhost:5672/%2f";
-        let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
+    // Connect to the RabbitMQ server
+    let addr = "amqp://guest:guest@localhost:5672/%2f";
+    let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
 
-        // Create a channel
-        let channel = conn.create_channel().await?;
+    // Create a channel
+    let channel = conn.create_channel().await?;
+    channel.confirm_select(ConfirmSelectOptions::default()).await?;
 
-        // Declare a queue
-        let queue_name = "send_request_queue";
-        channel
-            .queue_declare(queue_name, QueueDeclareOptions::default(), FieldTable::default())
-            .await?;
+    // Declare a queue
+    let queue_name = "send_request_queue";
 
-        // Consume messages from the queue
-        let mut consumer = channel
-            .basic_consume(
-                queue_name,
-                "my_consumer",
-                BasicConsumeOptions::default(),
-                FieldTable::default(),
-            )
-            .await?;
+    // TODO: declare queue as persistent through `QueueDeclareOptions`. See message durability section:
+    // https://www.rabbitmq.com/tutorials/tutorial-two-python.html.
+    // Also make messages persistent by updating publisher. The value `PERSISTENT_DELIVERY_MODE` is 2,
+    // see: https://pika.readthedocs.io/en/stable/_modules/pika/spec.html.
+    // Even this doesn't fully guarantee message persistence, see "Note on message persistence"
+    // in the tutorial which links to: https://www.rabbitmq.com/confirms.html#publisher-confirms.
+    // We have enabled publisher confirms in the next step.
+    channel
+        .queue_declare(queue_name, QueueDeclareOptions::default(), FieldTable::default())
+        .await?;
+    // Enable publisher confirms
+    channel.confirm_select(ConfirmSelectOptions::default()).await?;
 
-        println!("Waiting for messages...");
+    // Consume messages from the queue
+    let mut consumer = channel
+        .basic_consume(
+            queue_name,
+            "my_consumer",
+            BasicConsumeOptions::default(),
+            FieldTable::default(),
+        )
+        .await.expect("basic_consume");
 
-        // Process incoming messages in a separate thread.
-        tokio::spawn(async move {
-            while let Some(delivery) = consumer.next().await {
-                let delivery = delivery.expect("error in consumer");
-                delivery
-                    .ack(BasicAckOptions::default())
-                    .await
-                    .expect("ack");
-                // dbg!(delivery); // uncomment if you want to see continuous dump.
-            }
-        });
+    println!("Waiting for messages...");
 
-        // Publish messages to the queue in a separate thread.
-        let message = b"Hello, RabbitMQ!";
-        tokio::spawn(async move {
-            loop {
-                let confirm = channel
-                    .basic_publish(
-                        "",
-                        queue_name,
-                        BasicPublishOptions::default(),
-                        message,
-                        BasicProperties::default(),
-                    )
-                    .await.unwrap().await.unwrap();
-                assert_eq!(confirm, Confirmation::NotRequested);
-            }
-        });
-    }
+    // Process incoming messages in a separate thread.
+    tokio::spawn(async move {
+        while let Some(delivery) = consumer.next().await {
+            let delivery = delivery.expect("error in consumer");
+            delivery
+                .ack(BasicAckOptions::default())
+                .await
+                .expect("basic_ack");
+            dbg!(delivery); // uncomment if you want to see continuous dump.
+        }
+    });
     ///////////////////////////////////////////////////////////////////
 
     //////////////// experimental GraphQL integration /////////////////
@@ -143,9 +132,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
-                .data(DBContext {
+                .data(ApiContext {
                     user_balance_db,
-                    mt: Arc::new(RwLock::new(mt))
+                    mt: Arc::new(RwLock::new(mt)),
+                    channel,
                 })
                 .finish();
             let app = Router::new()
