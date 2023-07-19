@@ -4,11 +4,11 @@ use futures_lite::stream::StreamExt;
 
 use axum::{extract::Extension, routing::get, Router, Server};
 use lapin::publisher_confirm::Confirmation;
-use pg_bigdecimal::PgNumeric;
 use tokio_postgres::NoTls;
+use user_balance::UserBalanceConfig;
 
 use std::sync::Arc;
-use futures::lock::Mutex;
+use tokio::sync::RwLock;
 use model::MutationRoot;
 
 use lapin::{
@@ -22,6 +22,7 @@ use pmtree::MerkleTree;
 mod model;
 mod routes;
 mod merkle;
+mod user_balance;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -40,24 +41,29 @@ enum MerkleCommand {
     Load
 }
 
+struct DBContext {
+    user_balance_db: UserBalanceConfig,
+    mt: Arc<RwLock<MerkleTree<PostgresDBConfig, MyPoseidon>>>,
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     //////////////// experimental RabbitMQ integration ////////////////
-    // Connect to the RabbitMQ server
     if cli.rabbitmq {
+        // Connect to the RabbitMQ server
         let addr = "amqp://guest:guest@localhost:5672/%2f";
-        let conn = Connection::connect(addr, ConnectionProperties::default()).await.unwrap();
+        let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
 
         // Create a channel
-        let channel = conn.create_channel().await.unwrap();
+        let channel = conn.create_channel().await?;
 
         // Declare a queue
         let queue_name = "send_request_queue";
         channel
             .queue_declare(queue_name, QueueDeclareOptions::default(), FieldTable::default())
-            .await.unwrap();
+            .await?;
 
         // Consume messages from the queue
         let mut consumer = channel
@@ -67,7 +73,7 @@ async fn main() {
                 BasicConsumeOptions::default(),
                 FieldTable::default(),
             )
-            .await.unwrap();
+            .await?;
 
         println!("Waiting for messages...");
 
@@ -105,7 +111,7 @@ async fn main() {
     //////////////// experimental GraphQL integration /////////////////
     match cli.merkle {
         Some(t) => {
-            let (client, connection) = tokio_postgres::connect("host=localhost user=dev dbname=arcpay", NoTls).await.unwrap();
+            let (client, connection) = tokio_postgres::connect("host=localhost user=dev dbname=arcpay", NoTls).await?;
 
             // The connection object performs the actual communication with the database,
             // so spawn it off to run on its own.
@@ -115,38 +121,48 @@ async fn main() {
                 }
             });
 
+            let client = Arc::new(RwLock::new(client));
+
             let mt = match t {
                 MerkleCommand::New => MerkleTree::<PostgresDBConfig, MyPoseidon>::new(
                     32,
                     PostgresDBConfig {
-                        client,
+                        client: client.clone(),
                         tablename: "test".to_string()
-                    }).await.unwrap(),
+                    }).await?,
                 MerkleCommand::Load => MerkleTree::<PostgresDBConfig, MyPoseidon>::load(
                     PostgresDBConfig {
-                        client,
+                        client: client.clone(),
                         tablename: "test".to_string()
-                    }).await.unwrap(),
+                    }).await?,
+            };
+
+            let user_balance_db = UserBalanceConfig {
+                client,
+                tablename: "user_balance".to_string()
             };
 
             let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
-                .data(Arc::new(Mutex::new(mt)))
+                .data(DBContext {
+                    user_balance_db,
+                    mt: Arc::new(RwLock::new(mt))
+                })
                 .finish();
             let app = Router::new()
                 .route("/", get(graphql_playground).post(graphql_handler))
                 .route("/health", get(health))
                 .layer(Extension(schema));
-            Server::bind(&"0.0.0.0:8000".parse().unwrap())
+            Server::bind(&"0.0.0.0:8000".parse()?)
                 .serve(app.into_make_service())
-                .await
-                .unwrap();
+                .await?;
 
         }
 
         None => {}
     }
 
-    let provider = Provider::<Http>::try_from("https://eth.llamarpc.com").unwrap();
-    let block = provider.get_block(100u64).await.unwrap();
-    println!("Got block: {}", serde_json::to_string(&block).unwrap());
+    let provider = Provider::<Http>::try_from("https://eth.llamarpc.com")?;
+    let block = provider.get_block(100u64).await?;
+    println!("Got block: {}", serde_json::to_string(&block)?);
+    Ok(())
 }

@@ -1,12 +1,10 @@
 use async_graphql::{Context, Object, SimpleObject, Schema, EmptySubscription, InputObject};
-use pmtree::{MerkleTree, Hasher};
+use pmtree::Hasher;
 use rln::circuit::Fr;
-use std::sync::Arc;
-use futures::lock::Mutex;
 use secp256k1::{Secp256k1, Message, ecdsa, PublicKey};
 use sha3::{Digest, Keccak256};
 
-use crate::merkle::{PostgresDBConfig, MyPoseidon};
+use crate::{merkle::MyPoseidon, DBContext};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub(crate) struct QueryRoot;
@@ -16,12 +14,18 @@ impl QueryRoot {
     /// Returns the merkle root.
     /// Unsafe because it puts a lock on the merkle tree.
     async fn unsafe_root(&self, ctx: &Context<'_>) -> Vec<u8> {
-        let mt = ctx.data_unchecked::<SyncMerkle>().lock().await;
+        let mt = ctx.data_unchecked::<DBContext>().mt.read().await;
         MyPoseidon::serialize(mt.root())
+    }
+
+    async fn initiate_send(&self, ctx: &Context<'_>, address: [u8; 20], amount: u64) -> bool {
+        dbg!(&amount);
+        let db = &ctx.data_unchecked::<DBContext>().user_balance_db;
+
+        db.is_balance_sufficient(&address, &amount.to_be_bytes()).await.unwrap()
     }
 }
 
-type SyncMerkle = Arc<Mutex<MerkleTree::<PostgresDBConfig, MyPoseidon>>>;
 pub(crate) struct MutationRoot;
 
 /// Leaf structure of the merkle tree.
@@ -43,7 +47,7 @@ struct MerkleInfo {
 impl MutationRoot {
     /// Insert a leaf in the merkle tree.
     async fn unsafe_insert(&self, ctx: &Context<'_>, leaf: Leaf) -> MerkleInfo {
-        let mut mt = ctx.data_unchecked::<SyncMerkle>().lock().await;
+        let mut mt = ctx.data_unchecked::<DBContext>().mt.write().await;
         let mut address = vec![0u8; 12];
         address.extend_from_slice(&leaf.address);
         let hash = MyPoseidon::hash(&[MyPoseidon::deserialize(address), Fr::from(leaf.low_coin), Fr::from(leaf.high_coin)]);
@@ -67,7 +71,7 @@ impl MutationRoot {
         sig: [u8; 64],
         pubkey: [u8; 65],
     ) -> Vec<u8> {
-        let mut mt = ctx.data_unchecked::<SyncMerkle>().lock().await;
+        let mut mt = ctx.data_unchecked::<DBContext>().mt.write().await;
         let hashed_leaf = mt.get(key).await.unwrap();
 
         let mut sender = vec![0u8; 12];
