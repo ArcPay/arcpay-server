@@ -33,14 +33,14 @@ pub(crate) struct MutationRoot;
 
 /// Leaf structure of the merkle tree.
 /// `address` owns the coin range `[low_coin, high_coin]`.
-#[derive(InputObject, Serialize, Deserialize)]
-struct Leaf {
+#[derive(Debug, InputObject, Serialize, Deserialize)]
+pub(crate) struct Leaf {
     address: [u8; 20],
     low_coin: u64,
     high_coin: u64,
 }
 
-#[derive(SimpleObject, Serialize, Deserialize)]
+#[derive(Debug, SimpleObject, Serialize, Deserialize)]
 struct MerkleInfo {
     // See https://docs.rs/serde_bytes/latest/serde_bytes for this tag.
     #[serde(with = "serde_bytes")]
@@ -51,8 +51,8 @@ struct MerkleInfo {
 
 // `serde` crate can't serialize large arrays, hence using specially designed `serde_with`.
 #[serde_as]
-#[derive(InputObject, Serialize, Deserialize)]
-struct Signature {
+#[derive(Debug, InputObject, Serialize, Deserialize)]
+pub(crate) struct Signature {
     #[serde_as(as = "[_; 64]")]
     sig: [u8; 64],
     #[serde_as(as = "[_; 65]")]

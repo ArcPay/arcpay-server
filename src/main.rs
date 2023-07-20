@@ -17,7 +17,7 @@ use lapin::{
 
 use clap::Parser;
 
-use crate::{merkle::{PostgresDBConfig, MyPoseidon}, routes::{graphql_playground, graphql_handler, health}, model::QueryRoot};
+use crate::{merkle::{PostgresDBConfig, MyPoseidon}, routes::{graphql_playground, graphql_handler, health}, model::{Leaf, Signature, QueryRoot}};
 use pmtree::MerkleTree;
 mod model;
 mod routes;
@@ -54,7 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a channel
     let channel = conn.create_channel().await?;
-    channel.confirm_select(ConfirmSelectOptions::default()).await?;
 
     // Declare a queue
     let queue_name = "send_request_queue";
@@ -88,11 +87,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(delivery) = consumer.next().await {
             let delivery = delivery.expect("error in consumer");
+            let mesg: (Leaf, usize, u64, Vec<u8>, Signature) = bincode::deserialize(delivery.data.as_slice())
+                .expect("deserialization should be correct");
+            dbg!(&mesg);
+            let (leaf, key, highest_coin_to_send, recipient, sig) = mesg;
             delivery
                 .ack(BasicAckOptions::default())
                 .await
                 .expect("basic_ack");
-            dbg!(delivery); // uncomment if you want to see continuous dump.
+            dbg!(delivery);
         }
     });
     ///////////////////////////////////////////////////////////////////
