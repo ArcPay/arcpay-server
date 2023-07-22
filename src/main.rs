@@ -1,5 +1,5 @@
-use async_graphql::{Schema, EmptySubscription};
-use ethers_providers::{Provider, Http, Middleware};
+use async_graphql::{EmptySubscription, Schema};
+use ethers_providers::{Http, Middleware, Provider};
 use futures_lite::stream::StreamExt;
 
 use axum::{extract::Extension, routing::get, Router, Server};
@@ -7,21 +7,23 @@ use lapin::Channel;
 use tokio_postgres::NoTls;
 use user_balance::UserBalanceConfig;
 
+use model::MutationRoot;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use model::MutationRoot;
 
-use lapin::{
-    options::*, types::FieldTable, Connection, ConnectionProperties,
-};
+use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 
 use clap::Parser;
 
-use crate::{merkle::{PostgresDBConfig, MyPoseidon}, routes::{graphql_playground, graphql_handler, health}, model::{Leaf, Signature, QueryRoot}};
+use crate::{
+    merkle::{MyPoseidon, PostgresDBConfig},
+    model::{Leaf, QueryRoot, Signature},
+    routes::{graphql_handler, graphql_playground, health},
+};
 use pmtree::MerkleTree;
+mod merkle;
 mod model;
 mod routes;
-mod merkle;
 mod user_balance;
 
 #[derive(Parser, Debug)]
@@ -34,7 +36,7 @@ struct Cli {
 #[derive(clap::ValueEnum, Debug, Clone)]
 enum MerkleCommand {
     New,
-    Load
+    Load,
 }
 
 struct ApiContext {
@@ -66,10 +68,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // in the tutorial which links to: https://www.rabbitmq.com/confirms.html#publisher-confirms.
     // We have enabled publisher confirms in the next step.
     channel
-        .queue_declare(queue_name, QueueDeclareOptions::default(), FieldTable::default())
+        .queue_declare(
+            queue_name,
+            QueueDeclareOptions::default(),
+            FieldTable::default(),
+        )
         .await?;
     // Enable publisher confirms
-    channel.confirm_select(ConfirmSelectOptions::default()).await?;
+    channel
+        .confirm_select(ConfirmSelectOptions::default())
+        .await?;
 
     // Consume messages from the queue
     let mut consumer = channel
@@ -79,7 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )
-        .await.expect("basic_consume");
+        .await
+        .expect("basic_consume");
 
     println!("Waiting for messages...");
 
@@ -87,8 +96,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(delivery) = consumer.next().await {
             let delivery = delivery.expect("error in consumer");
-            let mesg: (Leaf, usize, u64, Vec<u8>, Signature) = bincode::deserialize(delivery.data.as_slice())
-                .expect("deserialization should be correct");
+            let mesg: (Leaf, usize, u64, Vec<u8>, Signature) =
+                bincode::deserialize(delivery.data.as_slice())
+                    .expect("deserialization should be correct");
             dbg!(&mesg);
             let (leaf, key, highest_coin_to_send, recipient, sig) = mesg;
             delivery
@@ -101,54 +111,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///////////////////////////////////////////////////////////////////
 
     //////////////// experimental GraphQL integration /////////////////
-    match cli.merkle {
-        Some(t) => {
-            let (client, connection) = tokio_postgres::connect("host=localhost user=dev dbname=arcpay", NoTls).await?;
+    if let Some(t) = cli.merkle {
+        let (client, connection) =
+            tokio_postgres::connect("host=localhost user=dev dbname=arcpay", NoTls).await?;
 
-            // The connection object performs the actual communication with the database,
-            // so spawn it off to run on its own.
-            tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    eprintln!("connection error: {}", e);
-                }
-            });
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
 
-            let client = Arc::new(RwLock::new(client));
+        let client = Arc::new(RwLock::new(client));
 
-            let db_config = PostgresDBConfig {
-                client: client.clone(),
-                merkle_table: "test".to_string(),
-                pre_image_table: "pre_image".to_string(),
-            };
+        let db_config = PostgresDBConfig {
+            client: client.clone(),
+            merkle_table: "test".to_string(),
+            pre_image_table: "pre_image".to_string(),
+        };
 
-            let mt = match t {
-                MerkleCommand::New => MerkleTree::<PostgresDBConfig, MyPoseidon>::new(32, db_config).await?,
-                MerkleCommand::Load => MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config).await?,
-            };
+        let mt = match t {
+            MerkleCommand::New => {
+                MerkleTree::<PostgresDBConfig, MyPoseidon>::new(32, db_config).await?
+            }
+            MerkleCommand::Load => {
+                MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config).await?
+            }
+        };
 
-            let user_balance_db = UserBalanceConfig {
-                client,
-                tablename: "user_balance".to_string()
-            };
+        let user_balance_db = UserBalanceConfig {
+            client,
+            tablename: "user_balance".to_string(),
+        };
 
-            let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
-                .data(ApiContext {
-                    user_balance_db,
-                    mt: Arc::new(RwLock::new(mt)),
-                    channel,
-                })
-                .finish();
-            let app = Router::new()
-                .route("/", get(graphql_playground).post(graphql_handler))
-                .route("/health", get(health))
-                .layer(Extension(schema));
-            Server::bind(&"0.0.0.0:8000".parse()?)
-                .serve(app.into_make_service())
-                .await?;
-
-        }
-
-        None => {}
+        let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
+            .data(ApiContext {
+                user_balance_db,
+                mt: Arc::new(RwLock::new(mt)),
+                channel,
+            })
+            .finish();
+        let app = Router::new()
+            .route("/", get(graphql_playground).post(graphql_handler))
+            .route("/health", get(health))
+            .layer(Extension(schema));
+        Server::bind(&"0.0.0.0:8000".parse()?)
+            .serve(app.into_make_service())
+            .await?;
     }
 
     let provider = Provider::<Http>::try_from("https://eth.llamarpc.com")?;
