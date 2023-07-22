@@ -115,18 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let client = Arc::new(RwLock::new(client));
 
+            let db_config = PostgresDBConfig {
+                client: client.clone(),
+                merkle_table: "test".to_string(),
+                pre_image_table: "pre_image".to_string(),
+            };
+
             let mt = match t {
-                MerkleCommand::New => MerkleTree::<PostgresDBConfig, MyPoseidon>::new(
-                    32,
-                    PostgresDBConfig {
-                        client: client.clone(),
-                        tablename: "test".to_string()
-                    }).await?,
-                MerkleCommand::Load => MerkleTree::<PostgresDBConfig, MyPoseidon>::load(
-                    PostgresDBConfig {
-                        client: client.clone(),
-                        tablename: "test".to_string()
-                    }).await?,
+                MerkleCommand::New => MerkleTree::<PostgresDBConfig, MyPoseidon>::new(32, db_config).await?,
+                MerkleCommand::Load => MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config).await?,
             };
 
             let user_balance_db = UserBalanceConfig {
