@@ -2,12 +2,10 @@ use async_graphql::{Context, EmptySubscription, InputObject, Object, Schema, Sim
 use lapin::{options::BasicPublishOptions, BasicProperties};
 use pmtree::Hasher;
 use rln::circuit::Fr;
-use secp256k1::{ecdsa, Message, PublicKey, Secp256k1};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
-use sha3::{Digest, Keccak256};
 
-use crate::{merkle::MyPoseidon, ApiContext};
+use crate::{merkle::MyPoseidon, send_consumer::verify_ecdsa, ApiContext};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub(crate) struct QueryRoot;
@@ -47,9 +45,9 @@ pub(crate) struct Leaf {
 #[derive(Debug, InputObject, Serialize, Deserialize)]
 pub(crate) struct Signature {
     #[serde_as(as = "[_; 64]")]
-    sig: [u8; 64],
+    pub sig: [u8; 64],
     #[serde_as(as = "[_; 65]")]
-    pubkey: [u8; 65],
+    pub pubkey: [u8; 65],
 }
 
 #[derive(Debug, SimpleObject, Serialize, Deserialize)]
@@ -59,6 +57,41 @@ struct MerkleInfo {
     root: Vec<u8>,
     #[serde(with = "serde_bytes")]
     leaf: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub(crate) struct MyFr(Fr);
+
+pub(crate) type MerkleProof = Vec<(MyFr, u8)>;
+
+impl Serialize for MyFr {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let serialized_data = MyPoseidon::serialize(self.0);
+        serializer.serialize_bytes(&serialized_data)
+    }
+}
+
+impl<'de> Deserialize<'de> for MyFr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Deserialize the binary data into a Vec<u8>
+        let serialized_data: Vec<u8> = Vec::deserialize(deserializer)?;
+
+        // Call your existing deserialize function to construct MyFr from Vec<u8>
+        let my_fr_instance = MyFr(MyPoseidon::deserialize(serialized_data));
+
+        // Return the newly constructed MyFr instance
+        Ok(my_fr_instance)
+    }
+}
+
+fn to_my_fr(from: Vec<(Fr, u8)>) -> Vec<(MyFr, u8)> {
+    from.iter().map(|(fr, val)| (MyFr(*fr), *val)).collect()
 }
 
 #[Object]
@@ -90,11 +123,17 @@ impl MutationRoot {
         recipient: [u8; 20],
         sig: Signature,
     ) -> Vec<u8> {
+        ///// Verify signature and public key in `sig` is correct. /////
+        let mut receiver = vec![0u8; 12];
+        receiver.extend_from_slice(&recipient);
+        verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
+
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
 
         let hashed_leaf = mt.get(index as usize).await.unwrap();
 
+        // Verify that sender's leaf is the same as the hash of the input.
         let mut sender = vec![0u8; 12];
         sender.extend_from_slice(&leaf.address);
         assert_eq!(
@@ -106,30 +145,7 @@ impl MutationRoot {
             ])
         );
 
-        let mut receiver = vec![0u8; 12];
-        receiver.extend_from_slice(&recipient);
-        let msg = MyPoseidon::hash(&[
-            Fr::from(leaf.low_coin),
-            Fr::from(leaf.high_coin),
-            Fr::from(highest_coin_to_send),
-            MyPoseidon::deserialize(receiver.clone()),
-        ]);
-        dbg!(MyPoseidon::serialize(msg));
-
-        let secp = Secp256k1::verification_only();
-        assert!(secp
-            .verify_ecdsa(
-                &Message::from_slice(&MyPoseidon::serialize(msg)).unwrap(),
-                &ecdsa::Signature::from_compact(&sig.sig).unwrap(),
-                &PublicKey::from_slice(&sig.pubkey).unwrap(),
-            )
-            .is_ok());
-
-        assert_eq!(
-            Keccak256::digest(&sig.pubkey[1..65]).as_slice()[12..],
-            leaf.address,
-            "address doesn't match"
-        );
+        let from_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
 
         mt.set(
             index as usize,
@@ -146,6 +162,12 @@ impl MutationRoot {
         )
         .await
         .unwrap();
+
+        let sender_new_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
+
+        let receiver_index = mt.leaves_set();
+
+        // Add a new leaf for recipient.
         mt.update_next(
             MyPoseidon::hash(&[
                 MyPoseidon::deserialize(receiver),
@@ -161,12 +183,24 @@ impl MutationRoot {
         .await
         .unwrap();
 
+        let recipient_new_proof = to_my_fr(mt.proof(receiver_index).await.unwrap().0);
+
+        assert_eq!(from_proof.len(), 32);
+
+        // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 
-        // Serialize variables into Vec<u8>
-        let queue_message =
-            bincode::serialize(&(leaf, index, highest_coin_to_send, recipient, sig))
-                .expect("unsafe_send: queue message should be serialized");
+        let queue_message = bincode::serialize(&(
+            leaf,
+            index,
+            highest_coin_to_send,
+            recipient,
+            sig,
+            from_proof,
+            sender_new_proof,
+            recipient_new_proof,
+        ))
+        .expect("unsafe_send: queue message should be serialized");
 
         let confirm = channel
             .basic_publish(
