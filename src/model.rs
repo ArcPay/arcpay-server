@@ -42,15 +42,6 @@ pub(crate) struct Leaf {
     pub high_coin: u64,
 }
 
-#[derive(Debug, SimpleObject, Serialize, Deserialize)]
-struct MerkleInfo {
-    // See https://docs.rs/serde_bytes/latest/serde_bytes for this tag.
-    #[serde(with = "serde_bytes")]
-    root: Vec<u8>,
-    #[serde(with = "serde_bytes")]
-    leaf: Vec<u8>,
-}
-
 // `serde` crate can't serialize large arrays, hence using specially designed `serde_with`.
 #[serde_as]
 #[derive(Debug, InputObject, Serialize, Deserialize)]
@@ -61,15 +52,22 @@ pub(crate) struct Signature {
     pubkey: [u8; 65],
 }
 
+#[derive(Debug, SimpleObject, Serialize, Deserialize)]
+struct MerkleInfo {
+    // See https://docs.rs/serde_bytes/latest/serde_bytes for this tag.
+    #[serde(with = "serde_bytes")]
+    root: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    leaf: Vec<u8>,
+}
+
 #[Object]
 impl MutationRoot {
     /// Insert a leaf in the merkle tree.
     async fn unsafe_insert(&self, ctx: &Context<'_>, leaf: Leaf) -> MerkleInfo {
         let mut mt = ctx.data_unchecked::<ApiContext>().mt.write().await;
-        let mut address = vec![0u8; 12];
-        address.extend_from_slice(&leaf.address);
         let hash = MyPoseidon::hash(&[
-            MyPoseidon::deserialize(address),
+            MyPoseidon::deserialize(leaf.address.into()),
             Fr::from(leaf.low_coin),
             Fr::from(leaf.high_coin),
         ]);
@@ -86,15 +84,16 @@ impl MutationRoot {
     async fn unsafe_send(
         &self,
         ctx: &Context<'_>,
+        index: u64,
         leaf: Leaf,
-        key: usize,
         highest_coin_to_send: u64,
         recipient: [u8; 20],
         sig: Signature,
     ) -> Vec<u8> {
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
-        let hashed_leaf = mt.get(key).await.unwrap();
+
+        let hashed_leaf = mt.get(index as usize).await.unwrap();
 
         let mut sender = vec![0u8; 12];
         sender.extend_from_slice(&leaf.address);
@@ -133,7 +132,7 @@ impl MutationRoot {
         );
 
         mt.set(
-            key,
+            index as usize,
             MyPoseidon::hash(&[
                 MyPoseidon::deserialize(sender),
                 Fr::from(highest_coin_to_send + 1),
@@ -165,8 +164,9 @@ impl MutationRoot {
         let channel = &api_context.channel;
 
         // Serialize variables into Vec<u8>
-        let queue_message = bincode::serialize(&(leaf, key, highest_coin_to_send, recipient, sig))
-            .expect("unsafe_send: queue message should be serialized");
+        let queue_message =
+            bincode::serialize(&(leaf, index, highest_coin_to_send, recipient, sig))
+                .expect("unsafe_send: queue message should be serialized");
 
         let confirm = channel
             .basic_publish(

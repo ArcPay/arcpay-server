@@ -16,6 +16,7 @@ use crate::model::Leaf;
 
 /// If we want different parameters to be stored at the time of new,load and get,put:
 /// create a new struct `PostgresDB` and impl Database for PostgresDB.
+#[derive(Clone)]
 pub(crate) struct PostgresDBConfig {
     pub client: Arc<RwLock<Client>>,
     pub merkle_table: String,
@@ -37,27 +38,43 @@ impl Database for PostgresDBConfig {
                 .await
                 .expect("Database::new build_transaction.start() error");
 
+            //  TODO remove drop
             let query = format!(
-                "CREATE TABLE {} (
+                "DROP TABLE IF EXISTS {merkle_table};",
+                merkle_table = db_config.merkle_table
+            );
+
+            let statement = tx.prepare(&query).await.unwrap();
+            tx.execute(&statement, &[]).await.unwrap();
+            let query = format!(
+                "CREATE TABLE {merkle_table} (
                     leaf NUMERIC(78,0) NOT NULL,
-                    index NUMERIC(20,0) NOT NULL,
-                    PRIMARY KEY (index)
+                    key NUMERIC(20,0) NOT NULL,
+                    PRIMARY KEY (key)
                 );",
-                db_config.merkle_table
+                merkle_table = db_config.merkle_table
             );
 
             let statement = tx.prepare(&query).await.unwrap();
             tx.execute(&statement, &[]).await.unwrap();
 
+            //  TODO remove drop
             let query = format!(
-                "CREATE TABLE {} (
+                "DROP TABLE if exists {pre_image_table};",
+                pre_image_table = db_config.pre_image_table
+            );
+
+            let statement = tx.prepare(&query).await.unwrap();
+            tx.execute(&statement, &[]).await.unwrap();
+            let query = format!(
+                "CREATE TABLE {pre_image_table} (
                     leaf NUMERIC(78,0) NOT NULL, -- 32 bytes
                     owner NUMERIC(49,0) NOT NULL, -- 20 bytes
                     coin_low NUMERIC(13,0) NOT NULL, -- 32 bytes
                     coin_high NUMERIC(13,0) NOT NULL, -- 32 bytes
                     PRIMARY KEY (leaf)
                 );",
-                db_config.pre_image_table
+                pre_image_table = db_config.pre_image_table
             );
 
             let statement = tx.prepare(&query).await.unwrap();
@@ -75,29 +92,28 @@ impl Database for PostgresDBConfig {
 
     // TODO: decide if get and put fn return error instead of panic on db error.
     async fn get(&self, key: DBKey) -> PmtreeResult<Option<Value>> {
-        let index = PgNumeric::new(Some(BigDecimal::new(
+        let key = PgNumeric::new(Some(BigDecimal::new(
             BigInt::from_bytes_be(num_bigint::Sign::Plus, &key),
             0,
         )));
-        dbg!(&index);
+        dbg!(&key);
 
-        let query = format!("SELECT leaf FROM {} WHERE index=$1", self.merkle_table);
+        let query = format!("SELECT leaf FROM {} WHERE key=$1", self.merkle_table);
 
         let client = self.client.read().await;
 
-        let rows = client.query(&query, &[&index]).await.unwrap();
+        let rows = client.query(&query, &[&key]).await.unwrap();
         dbg!(&rows);
         dbg!(rows.len());
         assert!(rows.len() <= 1, "key should be unique");
 
-        let ret = match rows.len() {
+        match rows.len() {
             1 => Ok(Some(to_bytes_vec(rows[0].get("leaf")))),
             0 => Ok(None),
             _ => Err(DatabaseError(DatabaseErrorKind::CustomError(
                 "Primary key should be unique".to_string(),
             ))),
-        };
-        dbg!(ret)
+        }
     }
 
     async fn get_pre_image(&self, key: DBKey) -> PmtreeResult<Option<Self::PreImage>> {
@@ -151,7 +167,7 @@ impl Database for PostgresDBConfig {
         match pre_image {
             Some(t) => {
                 // TODO: add a check to verify hash(pre_image) == value
-                let index = PgNumeric::new(Some(BigDecimal::new(
+                let key = PgNumeric::new(Some(BigDecimal::new(
                     BigInt::from_bytes_be(num_bigint::Sign::Plus, &key),
                     0,
                 )));
@@ -181,17 +197,17 @@ impl Database for PostgresDBConfig {
                     .await
                     .expect("Database::put_with_pre_image build_transaction error");
 
-                // If `index` already exists in the table, update `leaf` column.
+                // If `key` already exists in the table, update `leaf` column.
                 let query = format!(
-                    "INSERT INTO {} (leaf, index)
+                    "INSERT INTO {} (leaf, key)
                     VALUES ($1, $2)
-                    ON CONFLICT (index)
+                    ON CONFLICT (key)
                     DO UPDATE SET leaf=EXCLUDED.leaf",
                     self.merkle_table
                 );
                 let statement = tx.prepare(&query).await.unwrap();
 
-                let rows_modified = tx.execute(&statement, &[&leaf, &index]).await.unwrap();
+                let rows_modified = tx.execute(&statement, &[&leaf, &key]).await.unwrap();
                 assert_eq!(rows_modified, 1, "should be only 1 new row");
 
                 let query = format!(
@@ -216,7 +232,7 @@ impl Database for PostgresDBConfig {
     }
 
     async fn put(&mut self, key: DBKey, value: Value) -> PmtreeResult<()> {
-        let index = PgNumeric::new(Some(BigDecimal::new(
+        let key = PgNumeric::new(Some(BigDecimal::new(
             BigInt::from_bytes_be(num_bigint::Sign::Plus, &key),
             0,
         )));
@@ -227,16 +243,16 @@ impl Database for PostgresDBConfig {
 
         // If `index` already exists in the table, update `leaf` column.
         let query = format!(
-            "INSERT INTO {} (leaf, index)
+            "INSERT INTO {} (leaf, key)
             VALUES ($1, $2)
-            ON CONFLICT (index)
+            ON CONFLICT (key)
             DO UPDATE SET leaf=EXCLUDED.leaf",
             self.merkle_table
         );
 
         let client = self.client.write().await;
 
-        let rows_modified = client.execute(&query, &[&leaf, &index]).await.unwrap();
+        let rows_modified = client.execute(&query, &[&leaf, &key]).await.unwrap();
         assert_eq!(rows_modified, 1, "should be only 1 new row");
         Ok(())
     }
@@ -262,7 +278,6 @@ impl Hasher for MyPoseidon {
     }
 
     fn deserialize(value: Value) -> Self::Fr {
-        dbg!(&value);
         let mut value = value;
 
         // If hash is less than 32 bytes (if there are zeros at the beginning),
