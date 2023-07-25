@@ -2530,7 +2530,7 @@ dependencies = [
  "lapin",
  "num-bigint",
  "pg_bigdecimal",
- "pmtree 1.0.0 (git+https://github.com/0xbok/pmtree?rev=046063997f4f964b593d237ee30b3cc362497a53)",
+ "pmtree 1.0.0 (git+https://github.com/0xbok/pmtree?rev=9f8605d948bc56b50a0ba3755e6ef0b728f448ff)",
  "rln",
  "secp256k1",
  "serde",
@@ -3067,20 +3067,20 @@ dependencies = [
 [[package]]
 name = "pmtree"
 version = "1.0.0"
-source = "git+https://github.com/0xbok/pmtree?rev=046063997f4f964b593d237ee30b3cc362497a53#046063997f4f964b593d237ee30b3cc362497a53"
+source = "git+https://github.com/vacp2p/pmtree?rev=8b005bb44a4c51b56638ad6057b8bc90629fca59#8b005bb44a4c51b56638ad6057b8bc90629fca59"
 dependencies = [
- "async-recursion",
- "async-trait",
  "rayon",
- "tokio",
 ]
 
 [[package]]
 name = "pmtree"
 version = "1.0.0"
-source = "git+https://github.com/vacp2p/pmtree?rev=8b005bb44a4c51b56638ad6057b8bc90629fca59#8b005bb44a4c51b56638ad6057b8bc90629fca59"
+source = "git+https://github.com/0xbok/pmtree?rev=9f8605d948bc56b50a0ba3755e6ef0b728f448ff#9f8605d948bc56b50a0ba3755e6ef0b728f448ff"
 dependencies = [
+ "async-recursion",
+ "async-trait",
  "rayon",
+ "tokio",
 ]
 
 [[package]]

@@ -35,9 +35,9 @@ pub(crate) struct MutationRoot;
 /// `address` owns the coin range `[low_coin, high_coin]`.
 #[derive(Debug, InputObject, Serialize, Deserialize)]
 pub(crate) struct Leaf {
-    address: [u8; 20],
-    low_coin: u64,
-    high_coin: u64,
+    pub address: [u8; 20],
+    pub low_coin: u64,
+    pub high_coin: u64,
 }
 
 #[derive(Debug, SimpleObject, Serialize, Deserialize)]
@@ -67,7 +67,7 @@ impl MutationRoot {
         let mut address = vec![0u8; 12];
         address.extend_from_slice(&leaf.address);
         let hash = MyPoseidon::hash(&[MyPoseidon::deserialize(address), Fr::from(leaf.low_coin), Fr::from(leaf.high_coin)]);
-        mt.update_next(hash).await.unwrap();
+        mt.update_next(hash, Some(leaf)).await.unwrap();
         let leaf_index = mt.leaves_set() - 1;
         MerkleInfo {
             root: MyPoseidon::serialize(mt.root()),
@@ -83,7 +83,7 @@ impl MutationRoot {
         leaf: Leaf,
         key: usize,
         highest_coin_to_send: u64,
-        recipient: Vec<u8>,
+        recipient: [u8; 20],
         sig: Signature,
     ) -> Vec<u8> {
         let api_context = ctx.data_unchecked::<ApiContext>();
@@ -108,8 +108,23 @@ impl MutationRoot {
 
         assert_eq!(Keccak256::digest(&sig.pubkey[1..65]).as_slice()[12..], leaf.address, "address doesn't match");
 
-        mt.set(key, MyPoseidon::hash(&[MyPoseidon::deserialize(sender), Fr::from(highest_coin_to_send+1), Fr::from(leaf.high_coin)])).await.unwrap();
-        mt.update_next(MyPoseidon::hash(&[MyPoseidon::deserialize(receiver), Fr::from(leaf.low_coin), Fr::from(highest_coin_to_send)])).await.unwrap();
+        mt.set(
+            key,
+            MyPoseidon::hash(&[MyPoseidon::deserialize(sender), Fr::from(highest_coin_to_send+1), Fr::from(leaf.high_coin)]),
+            Some(Leaf {
+                address: leaf.address,
+                low_coin: highest_coin_to_send+1,
+                high_coin: leaf.high_coin,
+            })
+        ).await.unwrap();
+        mt.update_next(
+            MyPoseidon::hash(&[MyPoseidon::deserialize(receiver), Fr::from(leaf.low_coin), Fr::from(highest_coin_to_send)]),
+            Some(Leaf {
+                address: recipient,
+                low_coin: leaf.low_coin,
+                high_coin: highest_coin_to_send,
+            })
+        ).await.unwrap();
 
         let channel = &api_context.channel;
 
