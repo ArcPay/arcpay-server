@@ -92,8 +92,8 @@ reference for graphql server: https://oliverjumpertz.com/how-to-build-a-powerful
   CREATE TABLE state_tree (
     leaf NUMERIC(78,0) NOT NULL, -- 32 bytes
     owner NUMERIC(49,0) NOT NULL, -- 20 bytes
-    coin_low NUMERIC(13,0) NOT NULL, -- 32 bytes
-    coin_high NUMERIC(13,0) NOT NULL, -- 32 bytes
+    coin_low NUMERIC(13,0) NOT NULL, -- 5 bytes
+    coin_high NUMERIC(13,0) NOT NULL, -- 5 bytes
     PRIMARY KEY (leaf),
   );
   ```
