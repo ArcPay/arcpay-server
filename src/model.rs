@@ -1,11 +1,11 @@
-use async_graphql::{Context, Object, SimpleObject, Schema, EmptySubscription, InputObject};
+use async_graphql::{Context, EmptySubscription, InputObject, Object, Schema, SimpleObject};
 use lapin::{options::BasicPublishOptions, BasicProperties};
 use pmtree::Hasher;
 use rln::circuit::Fr;
-use secp256k1::{Secp256k1, Message, ecdsa, PublicKey};
+use secp256k1::{ecdsa, Message, PublicKey, Secp256k1};
+use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use sha3::{Digest, Keccak256};
-use serde::{Serialize, Deserialize};
 
 use crate::{merkle::MyPoseidon, ApiContext};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
@@ -25,7 +25,9 @@ impl QueryRoot {
         dbg!(&amount);
         let db = &ctx.data_unchecked::<ApiContext>().user_balance_db;
 
-        db.is_balance_sufficient(&address, &amount.to_be_bytes()).await.unwrap()
+        db.is_balance_sufficient(&address, &amount.to_be_bytes())
+            .await
+            .unwrap()
     }
 }
 
@@ -66,12 +68,16 @@ impl MutationRoot {
         let mut mt = ctx.data_unchecked::<ApiContext>().mt.write().await;
         let mut address = vec![0u8; 12];
         address.extend_from_slice(&leaf.address);
-        let hash = MyPoseidon::hash(&[MyPoseidon::deserialize(address), Fr::from(leaf.low_coin), Fr::from(leaf.high_coin)]);
+        let hash = MyPoseidon::hash(&[
+            MyPoseidon::deserialize(address),
+            Fr::from(leaf.low_coin),
+            Fr::from(leaf.high_coin),
+        ]);
         mt.update_next(hash, Some(leaf)).await.unwrap();
         let leaf_index = mt.leaves_set() - 1;
         MerkleInfo {
             root: MyPoseidon::serialize(mt.root()),
-            leaf: MyPoseidon::serialize(mt.get(leaf_index).await.unwrap())
+            leaf: MyPoseidon::serialize(mt.get(leaf_index).await.unwrap()),
         }
     }
 
@@ -92,39 +98,69 @@ impl MutationRoot {
 
         let mut sender = vec![0u8; 12];
         sender.extend_from_slice(&leaf.address);
-        assert_eq!(hashed_leaf, MyPoseidon::hash(&[MyPoseidon::deserialize(sender.clone()), Fr::from(leaf.low_coin), Fr::from(leaf.high_coin)]));
+        assert_eq!(
+            hashed_leaf,
+            MyPoseidon::hash(&[
+                MyPoseidon::deserialize(sender.clone()),
+                Fr::from(leaf.low_coin),
+                Fr::from(leaf.high_coin)
+            ])
+        );
 
         let mut receiver = vec![0u8; 12];
         receiver.extend_from_slice(&recipient);
-        let msg = MyPoseidon::hash(&[Fr::from(leaf.low_coin), Fr::from(leaf.high_coin), Fr::from(highest_coin_to_send), MyPoseidon::deserialize(receiver.clone())]);
+        let msg = MyPoseidon::hash(&[
+            Fr::from(leaf.low_coin),
+            Fr::from(leaf.high_coin),
+            Fr::from(highest_coin_to_send),
+            MyPoseidon::deserialize(receiver.clone()),
+        ]);
         dbg!(MyPoseidon::serialize(msg));
 
         let secp = Secp256k1::verification_only();
-        assert!(secp.verify_ecdsa(
-            &Message::from_slice(&MyPoseidon::serialize(msg)).unwrap(),
-            &ecdsa::Signature::from_compact(&sig.sig).unwrap(),
-            &PublicKey::from_slice(&sig.pubkey).unwrap(),
-        ).is_ok());
+        assert!(secp
+            .verify_ecdsa(
+                &Message::from_slice(&MyPoseidon::serialize(msg)).unwrap(),
+                &ecdsa::Signature::from_compact(&sig.sig).unwrap(),
+                &PublicKey::from_slice(&sig.pubkey).unwrap(),
+            )
+            .is_ok());
 
-        assert_eq!(Keccak256::digest(&sig.pubkey[1..65]).as_slice()[12..], leaf.address, "address doesn't match");
+        assert_eq!(
+            Keccak256::digest(&sig.pubkey[1..65]).as_slice()[12..],
+            leaf.address,
+            "address doesn't match"
+        );
 
         mt.set(
             key,
-            MyPoseidon::hash(&[MyPoseidon::deserialize(sender), Fr::from(highest_coin_to_send+1), Fr::from(leaf.high_coin)]),
+            MyPoseidon::hash(&[
+                MyPoseidon::deserialize(sender),
+                Fr::from(highest_coin_to_send + 1),
+                Fr::from(leaf.high_coin),
+            ]),
             Some(Leaf {
                 address: leaf.address,
-                low_coin: highest_coin_to_send+1,
+                low_coin: highest_coin_to_send + 1,
                 high_coin: leaf.high_coin,
-            })
-        ).await.unwrap();
+            }),
+        )
+        .await
+        .unwrap();
         mt.update_next(
-            MyPoseidon::hash(&[MyPoseidon::deserialize(receiver), Fr::from(leaf.low_coin), Fr::from(highest_coin_to_send)]),
+            MyPoseidon::hash(&[
+                MyPoseidon::deserialize(receiver),
+                Fr::from(leaf.low_coin),
+                Fr::from(highest_coin_to_send),
+            ]),
             Some(Leaf {
                 address: recipient,
                 low_coin: leaf.low_coin,
                 high_coin: highest_coin_to_send,
-            })
-        ).await.unwrap();
+            }),
+        )
+        .await
+        .unwrap();
 
         let channel = &api_context.channel;
 
@@ -143,7 +179,10 @@ impl MutationRoot {
                 queue_message.as_slice(),
                 BasicProperties::default(),
             )
-            .await.expect("basic_publish").await.expect("publisher-confirms");
+            .await
+            .expect("basic_publish")
+            .await
+            .expect("publisher-confirms");
 
         assert!(confirm.is_ack());
         // when `mandatory` is on, if the message is not sent to a queue for any reason
