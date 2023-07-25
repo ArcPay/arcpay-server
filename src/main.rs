@@ -96,16 +96,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         while let Some(delivery) = consumer.next().await {
             let delivery = delivery.expect("error in consumer");
-            let mesg: (Leaf, usize, u64, Vec<u8>, Signature) =
+            let mesg: (Leaf, usize, u64, [u8; 20], Signature) =
                 bincode::deserialize(delivery.data.as_slice())
                     .expect("deserialization should be correct");
-            dbg!(&mesg);
-            let (leaf, key, highest_coin_to_send, recipient, sig) = mesg;
+            let (leaf, index, highest_coin_to_send, recipient, sig) = mesg;
             delivery
                 .ack(BasicAckOptions::default())
                 .await
                 .expect("basic_ack");
-            dbg!(delivery);
         }
     });
     ///////////////////////////////////////////////////////////////////
