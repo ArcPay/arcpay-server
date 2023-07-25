@@ -5,7 +5,7 @@ use rln::circuit::Fr;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
-use crate::{merkle::MyPoseidon, send_consumer::verify_ecdsa, ApiContext};
+use crate::{merkle::MyPoseidon, send_consumer::verify_ecdsa, ApiContext, MERKLE_DEPTH};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub(crate) struct QueryRoot;
@@ -185,7 +185,7 @@ impl MutationRoot {
 
         let recipient_new_proof = to_my_fr(mt.proof(receiver_index).await.unwrap().0);
 
-        assert_eq!(from_proof.len(), 32);
+        assert_eq!(from_proof.len(), MERKLE_DEPTH);
 
         // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;

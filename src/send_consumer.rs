@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use tokio_postgres::NoTls;
 
 use crate::model::MerkleProof;
+use crate::MERKLE_DEPTH;
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
     model::Leaf,
@@ -73,7 +74,7 @@ pub(crate) async fn send_consumer(mut consumer: Consumer, cli: MerkleCommand) {
 
     let mt = match cli {
         MerkleCommand::New => {
-            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(32, db_config.clone())
+            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config.clone())
                 .await
                 .unwrap()
         }

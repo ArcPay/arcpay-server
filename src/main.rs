@@ -1,5 +1,5 @@
 use async_graphql::{EmptySubscription, Schema};
-use ethers_providers::{Http, Middleware, Provider};
+use ethers::prelude::*;
 
 use axum::{extract::Extension, routing::get, Router, Server};
 use lapin::Channel;
@@ -16,11 +16,13 @@ use clap::Parser;
 
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
+    mint::mint,
     model::QueryRoot,
     routes::{graphql_handler, graphql_playground, health},
 };
 use pmtree::MerkleTree;
 mod merkle;
+mod mint;
 mod model;
 mod routes;
 mod send_consumer;
@@ -31,6 +33,9 @@ struct Cli {
     /// Create or load a merkle tree
     #[arg(long)]
     merkle: Option<MerkleCommand>,
+    /// Activates the mint pipeline
+    #[arg(long, action=clap::ArgAction::SetTrue)]
+    mint: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone)]
@@ -45,55 +50,59 @@ struct ApiContext {
     channel: Channel,
 }
 
+const MERKLE_DEPTH: usize = 32; // TODO: read in from parameters file
+const ARCPAY_ADDRESS: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
+abigen!(ArcPayContract, "ArcPay.json");
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    //////////////// experimental RabbitMQ integration ////////////////
-    // Connect to the RabbitMQ server
-    let addr = "amqp://guest:guest@localhost:5672/%2f";
-    let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
-
-    // Create a channel
-    let channel = conn.create_channel().await?;
-
-    // Declare a queue
-    let queue_name = "send_request_queue";
-
-    // TODO: declare queue as persistent through `QueueDeclareOptions`. See message durability section:
-    // https://www.rabbitmq.com/tutorials/tutorial-two-python.html.
-    // Also make messages persistent by updating publisher. The value `PERSISTENT_DELIVERY_MODE` is 2,
-    // see: https://pika.readthedocs.io/en/stable/_modules/pika/spec.html.
-    // Even this doesn't fully guarantee message persistence, see "Note on message persistence"
-    // in the tutorial which links to: https://www.rabbitmq.com/confirms.html#publisher-confirms.
-    // We have enabled publisher confirms in the next step.
-    channel
-        .queue_declare(
-            queue_name,
-            QueueDeclareOptions::default(),
-            FieldTable::default(),
-        )
-        .await?;
-    // Enable publisher confirms
-    channel
-        .confirm_select(ConfirmSelectOptions::default())
-        .await?;
-
-    // Consume messages from the queue
-    let consumer = channel
-        .basic_consume(
-            queue_name,
-            "my_consumer",
-            BasicConsumeOptions::default(),
-            FieldTable::default(),
-        )
-        .await
-        .expect("basic_consume");
-
-    println!("Waiting for messages...");
-
-    //////////////// experimental GraphQL integration /////////////////
     if let Some(t) = cli.merkle {
+        //////////////// experimental RabbitMQ integration ////////////////
+        // Connect to the RabbitMQ server
+        let addr = "amqp://guest:guest@localhost:5672/%2f";
+        let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
+
+        // Create a channel
+        let channel = conn.create_channel().await?;
+
+        // Declare a queue
+        let queue_name = "send_request_queue";
+
+        // TODO: declare queue as persistent through `QueueDeclareOptions`. See message durability section:
+        // https://www.rabbitmq.com/tutorials/tutorial-two-python.html.
+        // Also make messages persistent by updating publisher. The value `PERSISTENT_DELIVERY_MODE` is 2,
+        // see: https://pika.readthedocs.io/en/stable/_modules/pika/spec.html.
+        // Even this doesn't fully guarantee message persistence, see "Note on message persistence"
+        // in the tutorial which links to: https://www.rabbitmq.com/confirms.html#publisher-confirms.
+        // We have enabled publisher confirms in the next step.
+        channel
+            .queue_declare(
+                queue_name,
+                QueueDeclareOptions::default(),
+                FieldTable::default(),
+            )
+            .await?;
+        // Enable publisher confirms
+        channel
+            .confirm_select(ConfirmSelectOptions::default())
+            .await?;
+
+        // Consume messages from the queue
+        let consumer = channel
+            .basic_consume(
+                queue_name,
+                "my_consumer",
+                BasicConsumeOptions::default(),
+                FieldTable::default(),
+            )
+            .await
+            .expect("basic_consume");
+
+        println!("Waiting for messages...");
+
+        //////////////// experimental GraphQL integration /////////////////
         let (client, connection) =
             tokio_postgres::connect("host=localhost user=dev dbname=arcpay", NoTls).await?;
 
@@ -123,9 +132,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         tokio::spawn(async move { send_consumer::send_consumer(consumer, t).await });
-        let provider = Provider::<Http>::try_from("https://eth.llamarpc.com")?;
-        let block = provider.get_block(100u64).await?;
-        println!("Got block: {}", serde_json::to_string(&block)?);
 
         let user_balance_db = UserBalanceConfig {
             client,
@@ -146,6 +152,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Server::bind(&"0.0.0.0:8000".parse()?)
             .serve(app.into_make_service())
             .await?;
+    }
+
+    if cli.mint {
+        let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
+        let contract_address = ARCPAY_ADDRESS.parse::<Address>()?;
+
+        let contract = ArcPayContract::new(contract_address, provider);
+        let events = contract
+            .event::<MintFilter>()
+            .from_block(0)
+            .to_block(BlockNumber::Finalized); // TODO: find the correct `to_block`.
+
+        /*
+        Here's another way of watching for events:
+        let abi: Abi = serde_json::from_slice(include_bytes!("../ArcPay.json"))?;
+        let contract = Contract::new(contract_address, abi, provider.clone());
+        let event = contract.event_for_name("Mint")?;
+        let filter = event.filter.from_block(0).to_block(BlockNumber::Finalized);
+        */
+        let mint_task = tokio::spawn(mint(events));
+        mint_task.await?;
     }
 
     Ok(())
