@@ -1,6 +1,5 @@
 use async_graphql::{EmptySubscription, Schema};
 use ethers_providers::{Http, Middleware, Provider};
-use futures_lite::stream::StreamExt;
 
 use axum::{extract::Extension, routing::get, Router, Server};
 use lapin::Channel;
@@ -17,13 +16,14 @@ use clap::Parser;
 
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
-    model::{Leaf, QueryRoot, Signature},
+    model::QueryRoot,
     routes::{graphql_handler, graphql_playground, health},
 };
 use pmtree::MerkleTree;
 mod merkle;
 mod model;
 mod routes;
+mod send_consumer;
 mod user_balance;
 
 #[derive(Parser, Debug)]
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     // Consume messages from the queue
-    let mut consumer = channel
+    let consumer = channel
         .basic_consume(
             queue_name,
             "my_consumer",
@@ -91,22 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("basic_consume");
 
     println!("Waiting for messages...");
-
-    // Process incoming messages in a separate thread.
-    tokio::spawn(async move {
-        while let Some(delivery) = consumer.next().await {
-            let delivery = delivery.expect("error in consumer");
-            let mesg: (Leaf, usize, u64, [u8; 20], Signature) =
-                bincode::deserialize(delivery.data.as_slice())
-                    .expect("deserialization should be correct");
-            let (leaf, index, highest_coin_to_send, recipient, sig) = mesg;
-            delivery
-                .ack(BasicAckOptions::default())
-                .await
-                .expect("basic_ack");
-        }
-    });
-    ///////////////////////////////////////////////////////////////////
 
     //////////////// experimental GraphQL integration /////////////////
     if let Some(t) = cli.merkle {
@@ -138,6 +122,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
+        tokio::spawn(async move { send_consumer::send_consumer(consumer, t).await });
+        let provider = Provider::<Http>::try_from("https://eth.llamarpc.com")?;
+        let block = provider.get_block(100u64).await?;
+        println!("Got block: {}", serde_json::to_string(&block)?);
+
         let user_balance_db = UserBalanceConfig {
             client,
             tablename: "user_balance".to_string(),
@@ -159,8 +148,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
     }
 
-    let provider = Provider::<Http>::try_from("https://eth.llamarpc.com")?;
-    let block = provider.get_block(100u64).await?;
-    println!("Got block: {}", serde_json::to_string(&block)?);
     Ok(())
 }
