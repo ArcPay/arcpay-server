@@ -5,7 +5,10 @@ use rln::circuit::Fr;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
-use crate::{merkle::MyPoseidon, send_consumer::verify_ecdsa, ApiContext, MERKLE_DEPTH};
+use crate::{
+    merkle::MyPoseidon, send_consumer::verify_ecdsa, ApiContext, QueueMessage, MERKLE_DEPTH,
+    QUEUE_NAME,
+};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub(crate) struct QueryRoot;
@@ -63,6 +66,16 @@ struct MerkleInfo {
 pub(crate) struct MyFr(Fr);
 
 pub(crate) type MerkleProof = Vec<(MyFr, u8)>;
+pub(crate) type SendMessageType = (
+    Leaf,
+    usize,
+    u64,
+    [u8; 20],
+    Signature,
+    MerkleProof,
+    MerkleProof,
+    MerkleProof,
+);
 
 impl Serialize for MyFr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -190,22 +203,22 @@ impl MutationRoot {
         // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 
-        let queue_message = bincode::serialize(&(
+        let queue_message = bincode::serialize(&QueueMessage::Send((
             leaf,
-            index,
+            index as usize,
             highest_coin_to_send,
             recipient,
             sig,
             from_proof,
             sender_new_proof,
             recipient_new_proof,
-        ))
+        )))
         .expect("unsafe_send: queue message should be serialized");
 
         let confirm = channel
             .basic_publish(
                 "",
-                "send_request_queue",
+                QUEUE_NAME,
                 BasicPublishOptions {
                     mandatory: true,
                     ..BasicPublishOptions::default()

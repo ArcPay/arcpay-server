@@ -1,7 +1,6 @@
 use futures_lite::stream::StreamExt;
 use lapin::{options::BasicAckOptions, Consumer};
 use pmtree::Hasher;
-use pmtree::MerkleTree;
 use rln::circuit::Fr;
 use secp256k1::{ecdsa, Message, PublicKey, Secp256k1};
 use sha3::{Digest, Keccak256};
@@ -9,13 +8,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_postgres::NoTls;
 
-use crate::model::MerkleProof;
-use crate::MERKLE_DEPTH;
+use crate::QueueMessage;
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
     model::Leaf,
     model::Signature,
-    MerkleCommand,
 };
 
 /// Verify signature and public key in `sig` is correct.
@@ -50,7 +47,7 @@ pub(crate) fn verify_ecdsa(
 }
 
 // Run this in a separate thread.
-pub(crate) async fn send_consumer(mut consumer: Consumer, cli: MerkleCommand) {
+pub(crate) async fn send_consumer(mut consumer: Consumer) {
     let (client, connection) =
         tokio_postgres::connect("host=localhost user=dev dbname=prover", NoTls)
             .await
@@ -72,6 +69,7 @@ pub(crate) async fn send_consumer(mut consumer: Consumer, cli: MerkleCommand) {
         pre_image_table: "pre_image".to_string(),
     };
 
+    /*
     let mt = match cli {
         MerkleCommand::New => {
             MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config.clone())
@@ -82,40 +80,40 @@ pub(crate) async fn send_consumer(mut consumer: Consumer, cli: MerkleCommand) {
             .await
             .unwrap(),
     };
+     */
 
     // Process incoming messages in a separate thread.
     while let Some(delivery) = consumer.next().await {
         let delivery = delivery.expect("error in consumer");
-        let mesg: (
-            Leaf,
-            usize,
-            u64,
-            [u8; 20],
-            Signature,
-            MerkleProof,
-            MerkleProof,
-            MerkleProof,
-        ) = bincode::deserialize(delivery.data.as_slice())
+        let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
             .expect("deserialization should be correct");
         dbg!(&mesg);
-        let (
-            leaf,
-            index,
-            highest_coin_to_send,
-            recipient,
-            sig,
-            from_proof,
-            sender_new_proof,
-            recipient_new_proof,
-        ) = mesg;
+
+        match mesg {
+            QueueMessage::Mint { receiver, amount } => {
+                dbg!(receiver, amount);
+            }
+            QueueMessage::Send(send) => {
+                let (
+                    leaf,
+                    index,
+                    highest_coin_to_send,
+                    recipient,
+                    sig,
+                    from_proof,
+                    sender_new_proof,
+                    recipient_new_proof,
+                ) = send;
+                let mut receiver = vec![0u8; 12];
+                receiver.extend_from_slice(&recipient);
+                verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
+                println!("verified ecdsa");
+            }
+        }
+
         delivery
             .ack(BasicAckOptions::default())
             .await
             .expect("basic_ack");
-
-        let mut receiver = vec![0u8; 12];
-        receiver.extend_from_slice(&recipient);
-        verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
-        println!("verified ecdsa");
     }
 }
