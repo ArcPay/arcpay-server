@@ -23,7 +23,6 @@ impl QueryRoot {
     }
 
     async fn initiate_send(&self, ctx: &Context<'_>, address: [u8; 20], amount: u64) -> bool {
-        dbg!(&amount);
         let db = &ctx.data_unchecked::<ApiContext>().user_balance_db;
 
         db.is_balance_sufficient(&address, &amount.to_be_bytes())

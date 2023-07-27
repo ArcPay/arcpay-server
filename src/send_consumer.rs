@@ -48,6 +48,7 @@ pub(crate) fn verify_ecdsa(
 
 // Run this in a separate thread.
 pub(crate) async fn send_consumer(mut consumer: Consumer) {
+    /*
     let (client, connection) =
         tokio_postgres::connect("host=localhost user=dev dbname=prover", NoTls)
             .await
@@ -60,16 +61,13 @@ pub(crate) async fn send_consumer(mut consumer: Consumer) {
             eprintln!("connection error: {}", e);
         }
     });
-
     let client = Arc::new(RwLock::new(client));
-
     let db_config = PostgresDBConfig {
         client: client.clone(),
         merkle_table: "test".to_string(),
         pre_image_table: "pre_image".to_string(),
     };
 
-    /*
     let mt = match cli {
         MerkleCommand::New => {
             MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config.clone())
@@ -87,7 +85,6 @@ pub(crate) async fn send_consumer(mut consumer: Consumer) {
         let delivery = delivery.expect("error in consumer");
         let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
             .expect("deserialization should be correct");
-        dbg!(&mesg);
 
         match mesg {
             QueueMessage::Mint { receiver, amount } => {

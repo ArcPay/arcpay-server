@@ -108,6 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move { send_consumer::send_consumer(consumer).await });
 
     let cli = Cli::parse();
+    let mut handles = vec![];
     let channel = Arc::new(channel);
 
     if let Some(t) = cli.merkle {
@@ -156,9 +157,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .route("/", get(graphql_playground).post(graphql_handler))
             .route("/health", get(health))
             .layer(Extension(schema));
-        Server::bind(&"0.0.0.0:8000".parse()?)
-            .serve(app.into_make_service())
-            .await?;
+        handles.push(tokio::spawn(async move {
+            Server::bind(&"0.0.0.0:8000".parse().unwrap())
+                .serve(app.into_make_service())
+                .await
+                .unwrap()
+        }));
     }
 
     if cli.mint {
@@ -178,8 +182,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let event = contract.event_for_name("Mint")?;
         let filter = event.filter.from_block(0).to_block(BlockNumber::Finalized);
         */
-        let mint_task = tokio::spawn(mint(events, channel.clone()));
-        mint_task.await?;
+        handles.push(tokio::spawn(
+            async move { mint(events, channel.clone()).await },
+        ));
+    }
+
+    for handle in handles {
+        handle.await.expect("joined task panicked");
     }
 
     Ok(())

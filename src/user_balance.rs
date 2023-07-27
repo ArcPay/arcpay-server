@@ -19,15 +19,12 @@ impl UserBalanceConfig {
             BigInt::from_bytes_be(num_bigint::Sign::Plus, owner),
             0,
         )));
-        dbg!(&index);
 
         let query = format!("SELECT balance FROM {} WHERE owner=$1", self.tablename);
 
         let client = self.client.read().await;
 
         let rows = client.query(&query, &[&index]).await?;
-        dbg!(&rows);
-        dbg!(rows.len());
         assert!(rows.len() <= 1, "key should be unique");
 
         match rows.len() {

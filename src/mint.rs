@@ -17,7 +17,6 @@ pub(crate) async fn mint(
             amount: f.amount,
         })
         .unwrap();
-        dbg!(&queue_message);
         let confirm = channel
             .basic_publish(
                 "",

@@ -96,15 +96,12 @@ impl Database for PostgresDBConfig {
             BigInt::from_bytes_be(num_bigint::Sign::Plus, &key),
             0,
         )));
-        dbg!(&key);
 
         let query = format!("SELECT leaf FROM {} WHERE key=$1", self.merkle_table);
 
         let client = self.client.read().await;
 
         let rows = client.query(&query, &[&key]).await.unwrap();
-        dbg!(&rows);
-        dbg!(rows.len());
         assert!(rows.len() <= 1, "key should be unique");
 
         match rows.len() {
@@ -121,7 +118,6 @@ impl Database for PostgresDBConfig {
             BigInt::from_bytes_be(num_bigint::Sign::Plus, &key),
             0,
         )));
-        dbg!(&index);
 
         let query = format!(
             "SELECT {pre_image}.owner, {pre_image}.coin_low, {pre_image}.coin_high
@@ -135,8 +131,6 @@ impl Database for PostgresDBConfig {
         let client = self.client.read().await;
 
         let rows = client.query(&query, &[&index]).await.unwrap();
-        dbg!(&rows);
-        dbg!(rows.len());
         assert!(rows.len() <= 1, "key should be unique");
 
         match rows.len() {
