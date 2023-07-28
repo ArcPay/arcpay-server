@@ -49,6 +49,7 @@ struct ApiContext {
     user_balance_db: UserBalanceConfig,
     mt: Arc<RwLock<MerkleTree<PostgresDBConfig, MyPoseidon>>>,
     channel: Arc<Channel>,
+    merkle_db: PostgresDBConfig,
 }
 
 const MERKLE_DEPTH: usize = 32; // TODO: read in from parameters file
@@ -134,10 +135,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mt = match t {
             MerkleCommand::New => {
-                MerkleTree::<PostgresDBConfig, MyPoseidon>::new(32, db_config).await?
+                MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config.clone())
+                    .await?
             }
             MerkleCommand::Load => {
-                MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config).await?
+                MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config.clone()).await?
             }
         };
 
@@ -151,6 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 user_balance_db,
                 mt: Arc::new(RwLock::new(mt)),
                 channel: channel.clone(),
+                merkle_db: db_config,
             })
             .finish();
         let app = Router::new()

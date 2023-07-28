@@ -22,6 +22,12 @@ impl QueryRoot {
         MyPoseidon::serialize(mt.root())
     }
 
+    // TODO: add some authentication for user privacy
+    async fn get_ownership_proofs(&self, ctx: &Context<'_>, address: [u8; 20]) -> Vec<CoinRange> {
+        let merkle_db = &ctx.data_unchecked::<ApiContext>().merkle_db;
+        merkle_db.get_for_address(&address).await
+    }
+
     async fn initiate_send(&self, ctx: &Context<'_>, address: [u8; 20], amount: u64) -> bool {
         let db = &ctx.data_unchecked::<ApiContext>().user_balance_db;
 
@@ -38,6 +44,13 @@ pub(crate) struct MutationRoot;
 #[derive(Debug, InputObject, Serialize, Deserialize)]
 pub(crate) struct Leaf {
     pub address: [u8; 20],
+    pub low_coin: u64,
+    pub high_coin: u64,
+}
+
+#[derive(Debug, Serialize, SimpleObject)]
+pub(crate) struct CoinRange {
+    pub index: usize,
     pub low_coin: u64,
     pub high_coin: u64,
 }
