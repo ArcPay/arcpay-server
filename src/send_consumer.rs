@@ -4,16 +4,14 @@ use pmtree::Hasher;
 use rln::circuit::Fr;
 use secp256k1::{ecdsa, Message, PublicKey, Secp256k1};
 use sha3::{Digest, Keccak256};
-use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_postgres::NoTls;
 
-use crate::QueueMessage;
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
-    model::Leaf,
-    model::Signature,
+    model::{mint_in_merkle, Leaf},
+    model::{send_in_merkle, Signature},
 };
+use crate::{QueueMessage, MAX_SINCE_LAST_PROVE};
 
 /// Verify signature and public key in `sig` is correct.
 pub(crate) fn verify_ecdsa(
@@ -47,64 +45,43 @@ pub(crate) fn verify_ecdsa(
 }
 
 // Run this in a separate thread.
-pub(crate) async fn send_consumer(mut consumer: Consumer) {
-    /*
-    let (client, connection) =
-        tokio_postgres::connect("host=localhost user=dev dbname=prover", NoTls)
-            .await
-            .unwrap();
-
-    // The connection object performs the actual communication with the database,
-    // so spawn it off to run on its own.
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
-    let client = Arc::new(RwLock::new(client));
-    let db_config = PostgresDBConfig {
-        client: client.clone(),
-        merkle_table: "test".to_string(),
-        pre_image_table: "pre_image".to_string(),
-    };
-
-    let mt = match cli {
-        MerkleCommand::New => {
-            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config.clone())
-                .await
-                .unwrap()
-        }
-        MerkleCommand::Load => MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config.clone())
-            .await
-            .unwrap(),
-    };
-     */
-
-    // Process incoming messages in a separate thread.
+pub(crate) async fn send_consumer(
+    mut consumer: Consumer,
+    mt: RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>,
+) {
     while let Some(delivery) = consumer.next().await {
         let delivery = delivery.expect("error in consumer");
         let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
             .expect("deserialization should be correct");
 
+        let mut mt = mt.write().await;
         match mesg {
             QueueMessage::Mint { receiver, amount } => {
                 dbg!(receiver, amount);
+                // TODO check what happens when amount overflows u64.
+                mint_in_merkle(&mut mt, receiver.into(), amount.as_u64()).await;
+                // Send it to be proved (block current thread).
+                // Persist proof.
+                // Check now - last proof time > MAX_SINCE_LAST_PROOF.
+                // If yes, prove the nova proof for groth16 and issue transaction.
+                // If no, nothing.
             }
             QueueMessage::Send(send) => {
-                let (
-                    leaf,
-                    index,
+                let (leaf, index, highest_coin_to_send, recipient, sig, proofs) = send;
+                send_in_merkle(
+                    &mut mt,
+                    index as u64,
+                    &leaf,
                     highest_coin_to_send,
-                    recipient,
-                    sig,
-                    from_proof,
-                    sender_new_proof,
-                    recipient_new_proof,
-                ) = send;
-                let mut receiver = vec![0u8; 12];
-                receiver.extend_from_slice(&recipient);
-                verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
-                println!("verified ecdsa");
+                    &recipient,
+                    &sig,
+                    false,
+                )
+                .await;
+                // Send it to be proved (block current thread).
+                // Persist proof.
+                // Check now - last proof time > MAX_SINCE_LAST_PROOF.
+                // If yes, prove the nova proof for groth16 and issue transaction.
             }
         }
 
