@@ -1,6 +1,7 @@
 use async_graphql::async_trait::async_trait;
 use num_bigint::BigInt;
 use pg_bigdecimal::{BigDecimal, PgNumeric};
+use pmtree::tree::Key;
 use pmtree::PmtreeErrorKind::DatabaseError;
 use pmtree::{DBKey, Database, DatabaseErrorKind, Hasher, PmtreeResult, Value};
 use rln::circuit::Fr as Fp;
@@ -12,7 +13,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use tokio_postgres::{Client, IsolationLevel};
 
-use crate::model::Leaf;
+use crate::model::{CoinRange, Leaf};
 
 /// If we want different parameters to be stored at the time of new,load and get,put:
 /// create a new struct `PostgresDB` and impl Database for PostgresDB.
@@ -21,6 +22,44 @@ pub(crate) struct PostgresDBConfig {
     pub client: Arc<RwLock<Client>>,
     pub merkle_table: String,
     pub pre_image_table: String,
+}
+
+impl PostgresDBConfig {
+    pub(crate) async fn get_for_address(&self, address: &[u8; 20]) -> Vec<CoinRange> {
+        let client = self.client.read().await;
+        let address = PgNumeric::new(Some(BigDecimal::new(
+            BigInt::from_bytes_be(num_bigint::Sign::Plus, address),
+            0,
+        )));
+        let query = format!(
+            "SELECT leaf, coin_low, coin_high from {} WHERE owner = $1",
+            self.pre_image_table
+        );
+
+        let rows = client.query(&query, &[&address]).await.unwrap();
+        let mut collection = vec![];
+        for row in rows {
+            let leaf: PgNumeric = row.get("leaf");
+            let low_coin = to_bytes_vec(row.get("coin_low"));
+            let high_coin = to_bytes_vec(row.get("coin_high"));
+
+            let query = format!("SELECT key from {} WHERE leaf=$1", self.merkle_table);
+
+            let key = client.query(&query, &[&leaf]).await.unwrap();
+            if !key.is_empty() {
+                assert_eq!(key.len(), 1);
+                let key: DBKey = to_byte_array(to_bytes_vec(key[0].get("key")));
+                let key: Key = key.into();
+                collection.push(CoinRange {
+                    index: key.1,
+                    low_coin: u64::from_be_bytes(to_byte_array(low_coin)),
+                    high_coin: u64::from_be_bytes(to_byte_array(high_coin)),
+                });
+            }
+        }
+
+        collection
+    }
 }
 
 #[async_trait]
