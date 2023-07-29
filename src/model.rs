@@ -1,13 +1,16 @@
+use tokio::sync::RwLockWriteGuard;
+
 use async_graphql::{Context, EmptySubscription, InputObject, Object, Schema, SimpleObject};
 use lapin::{options::BasicPublishOptions, BasicProperties};
-use pmtree::Hasher;
+use pmtree::{tree::Key, Database, Hasher, MerkleTree};
 use rln::circuit::Fr;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
 
 use crate::{
-    merkle::MyPoseidon, send_consumer::verify_ecdsa, ApiContext, QueueMessage, MERKLE_DEPTH,
-    QUEUE_NAME,
+    merkle::{MyPoseidon, PostgresDBConfig},
+    send_consumer::verify_ecdsa,
+    ApiContext, QueueMessage, MERKLE_DEPTH, QUEUE_NAME,
 };
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
@@ -24,7 +27,7 @@ impl QueryRoot {
 
     // TODO: add some authentication for user privacy
     async fn get_ownership_proofs(&self, ctx: &Context<'_>, address: [u8; 20]) -> Vec<CoinRange> {
-        let merkle_db = &ctx.data_unchecked::<ApiContext>().merkle_db;
+        let merkle_db = &ctx.data_unchecked::<ApiContext>().mt.read().await.db;
         merkle_db.get_for_address(&address).await
     }
 
@@ -66,7 +69,7 @@ pub(crate) struct Signature {
 }
 
 #[derive(Debug, SimpleObject, Serialize, Deserialize)]
-struct MerkleInfo {
+pub(crate) struct MerkleInfo {
     // See https://docs.rs/serde_bytes/latest/serde_bytes for this tag.
     #[serde(with = "serde_bytes")]
     root: Vec<u8>,
@@ -78,16 +81,7 @@ struct MerkleInfo {
 pub(crate) struct MyFr(Fr);
 
 pub(crate) type MerkleProof = Vec<(MyFr, u8)>;
-pub(crate) type SendMessageType = (
-    Leaf,
-    usize,
-    u64,
-    [u8; 20],
-    Signature,
-    MerkleProof,
-    MerkleProof,
-    MerkleProof,
-);
+pub(crate) type SendMessageType = (Leaf, usize, u64, [u8; 20], Signature, [MerkleProof; 3]);
 
 impl Serialize for MyFr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -119,24 +113,133 @@ fn to_my_fr(from: Vec<(Fr, u8)>) -> Vec<(MyFr, u8)> {
     from.iter().map(|(fr, val)| (MyFr(*fr), *val)).collect()
 }
 
-#[Object]
-impl MutationRoot {
-    /// Insert a leaf in the merkle tree.
-    async fn unsafe_insert(&self, ctx: &Context<'_>, leaf: Leaf) -> MerkleInfo {
-        let mut mt = ctx.data_unchecked::<ApiContext>().mt.write().await;
-        let hash = MyPoseidon::hash(&[
-            MyPoseidon::deserialize(leaf.address.into()),
-            Fr::from(leaf.low_coin),
-            Fr::from(leaf.high_coin),
-        ]);
-        mt.update_next(hash, Some(leaf)).await.unwrap();
-        let leaf_index = mt.leaves_set() - 1;
-        MerkleInfo {
-            root: MyPoseidon::serialize(mt.root()),
-            leaf: MyPoseidon::serialize(mt.get(leaf_index).await.unwrap()),
+pub(crate) async fn mint_in_merkle(
+    mt: &mut RwLockWriteGuard<'_, MerkleTree<PostgresDBConfig, MyPoseidon>>,
+    recipient: [u8; 20],
+    amount: u64,
+) -> MerkleInfo {
+    assert!(amount > 0, "amount should be > 0");
+
+    let num_leaves = mt.leaves_set();
+
+    let coin_range = match num_leaves {
+        0 => (0, amount - 1),
+        _ => {
+            let last_leaf_index = num_leaves - 1;
+            let key = Key(MERKLE_DEPTH, last_leaf_index);
+            let pre_image = mt
+                .db
+                .get_pre_image(key.into())
+                .await
+                .unwrap()
+                .ok_or("pre_image should exist")
+                .unwrap();
+
+            (pre_image.high_coin + 1, pre_image.high_coin + amount)
         }
+    };
+
+    let leaf = Leaf {
+        address: recipient,
+        low_coin: coin_range.0,
+        high_coin: coin_range.1,
+    };
+    let hash = MyPoseidon::hash(&[
+        MyPoseidon::deserialize(leaf.address.into()),
+        Fr::from(leaf.low_coin),
+        Fr::from(leaf.high_coin),
+    ]);
+    mt.update_next(hash, Some(leaf)).await.unwrap();
+    MerkleInfo {
+        root: MyPoseidon::serialize(mt.root()),
+        leaf: MyPoseidon::serialize(hash),
+    }
+}
+
+pub(crate) async fn send_in_merkle(
+    mt: &mut RwLockWriteGuard<'_, MerkleTree<PostgresDBConfig, MyPoseidon>>,
+    index: u64,
+    leaf: &Leaf,
+    highest_coin_to_send: u64,
+    recipient: &[u8; 20],
+    sig: &Signature,
+    is_return_proof: bool,
+) -> Option<[Vec<(MyFr, u8)>; 3]> {
+    let mut proofs: [Vec<(MyFr, u8)>; 3] = [vec![], vec![], vec![]];
+
+    ///// Verify signature and public key in `sig` is correct. /////
+    let mut receiver = vec![0u8; 12];
+    receiver.extend_from_slice(recipient);
+    verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
+
+    let hashed_leaf = mt.get(index as usize).await.unwrap();
+
+    // Verify that sender's leaf is the same as the hash of the input.
+    let mut sender = vec![0u8; 12];
+    sender.extend_from_slice(&leaf.address);
+    assert_eq!(
+        hashed_leaf,
+        MyPoseidon::hash(&[
+            MyPoseidon::deserialize(sender.clone()),
+            Fr::from(leaf.low_coin),
+            Fr::from(leaf.high_coin)
+        ])
+    );
+
+    if is_return_proof {
+        let from_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
+        proofs[0] = from_proof;
     }
 
+    mt.set(
+        index as usize,
+        MyPoseidon::hash(&[
+            MyPoseidon::deserialize(sender),
+            Fr::from(highest_coin_to_send + 1),
+            Fr::from(leaf.high_coin),
+        ]),
+        Some(Leaf {
+            address: leaf.address,
+            low_coin: highest_coin_to_send + 1,
+            high_coin: leaf.high_coin,
+        }),
+    )
+    .await
+    .unwrap();
+
+    let receiver_index = mt.leaves_set();
+
+    // Add a new leaf for recipient.
+    mt.update_next(
+        MyPoseidon::hash(&[
+            MyPoseidon::deserialize(receiver),
+            Fr::from(leaf.low_coin),
+            Fr::from(highest_coin_to_send),
+        ]),
+        Some(Leaf {
+            address: *recipient,
+            low_coin: leaf.low_coin,
+            high_coin: highest_coin_to_send,
+        }),
+    )
+    .await
+    .unwrap();
+
+    if is_return_proof {
+        let sender_new_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
+        let recipient_new_proof = to_my_fr(mt.proof(receiver_index).await.unwrap().0);
+        proofs[1] = sender_new_proof;
+        proofs[2] = recipient_new_proof;
+    }
+
+    match is_return_proof {
+        true => Some(proofs),
+        false => None,
+    }
+}
+
+#[Object]
+impl MutationRoot {
     /// Send coins `[leaf.low_coin, highest_coin_to_send]` to `receiver` from `leaf`.
     /// The send should be authorized by `leaf.address` through ECDSA signature `sig`.
     async fn unsafe_send(
@@ -148,70 +251,21 @@ impl MutationRoot {
         recipient: [u8; 20],
         sig: Signature,
     ) -> Vec<u8> {
-        ///// Verify signature and public key in `sig` is correct. /////
-        let mut receiver = vec![0u8; 12];
-        receiver.extend_from_slice(&recipient);
-        verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
-
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
 
-        let hashed_leaf = mt.get(index as usize).await.unwrap();
-
-        // Verify that sender's leaf is the same as the hash of the input.
-        let mut sender = vec![0u8; 12];
-        sender.extend_from_slice(&leaf.address);
-        assert_eq!(
-            hashed_leaf,
-            MyPoseidon::hash(&[
-                MyPoseidon::deserialize(sender.clone()),
-                Fr::from(leaf.low_coin),
-                Fr::from(leaf.high_coin)
-            ])
-        );
-
-        let from_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
-
-        mt.set(
-            index as usize,
-            MyPoseidon::hash(&[
-                MyPoseidon::deserialize(sender),
-                Fr::from(highest_coin_to_send + 1),
-                Fr::from(leaf.high_coin),
-            ]),
-            Some(Leaf {
-                address: leaf.address,
-                low_coin: highest_coin_to_send + 1,
-                high_coin: leaf.high_coin,
-            }),
+        let proofs = send_in_merkle(
+            &mut mt,
+            index,
+            &leaf,
+            highest_coin_to_send,
+            &recipient,
+            &sig,
+            true,
         )
         .await
+        .ok_or("proofs should be returned")
         .unwrap();
-
-        let sender_new_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
-
-        let receiver_index = mt.leaves_set();
-
-        // Add a new leaf for recipient.
-        mt.update_next(
-            MyPoseidon::hash(&[
-                MyPoseidon::deserialize(receiver),
-                Fr::from(leaf.low_coin),
-                Fr::from(highest_coin_to_send),
-            ]),
-            Some(Leaf {
-                address: recipient,
-                low_coin: leaf.low_coin,
-                high_coin: highest_coin_to_send,
-            }),
-        )
-        .await
-        .unwrap();
-
-        let recipient_new_proof = to_my_fr(mt.proof(receiver_index).await.unwrap().0);
-
-        assert_eq!(from_proof.len(), MERKLE_DEPTH);
-
         // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 
@@ -221,9 +275,7 @@ impl MutationRoot {
             highest_coin_to_send,
             recipient,
             sig,
-            from_proof,
-            sender_new_proof,
-            recipient_new_proof,
+            proofs,
         )))
         .expect("unsafe_send: queue message should be serialized");
 

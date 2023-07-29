@@ -3061,7 +3061,7 @@ dependencies = [
  "lapin",
  "num-bigint",
  "pg_bigdecimal",
- "pmtree 1.0.0 (git+https://github.com/arcpay/pmtree?rev=6252bba1a808a45ee1fdab4f58293b95e8517742)",
+ "pmtree 1.0.0",
  "rln",
  "secp256k1",
  "serde",
@@ -3698,7 +3698,6 @@ dependencies = [
 [[package]]
 name = "pmtree"
 version = "1.0.0"
-source = "git+https://github.com/arcpay/pmtree?rev=6252bba1a808a45ee1fdab4f58293b95e8517742#6252bba1a808a45ee1fdab4f58293b95e8517742"
 dependencies = [
  "async-recursion",
  "async-trait",
