@@ -277,7 +277,6 @@ impl MutationRoot {
         let root = MyPoseidon::serialize(mt.root());
         drop(mt);
 
-        dbg!("here");
         // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 

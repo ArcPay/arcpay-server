@@ -53,7 +53,6 @@ pub(crate) async fn send_consumer(
 ) {
     let arcpay_owner = ContractOwner::new().await.unwrap();
     while let Some(delivery) = consumer.next().await {
-        dbg!("hrrr");
         let delivery = delivery.expect("error in consumer");
         let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
             .expect("deserialization should be correct");
@@ -66,10 +65,8 @@ pub(crate) async fn send_consumer(
         // Persist proof.
 
         let mut mt = mt.write().await;
-        dbg!(&mesg);
         match mesg {
             QueueMessage::Mint { receiver, amount } => {
-                dbg!(receiver, amount);
                 // TODO check what happens when amount overflows u64.
                 mint_in_merkle(&mut mt, receiver.into(), amount.as_u64()).await;
             }
@@ -99,7 +96,6 @@ pub(crate) async fn send_consumer(
 
             let state_root_updated = arcpay_owner.update_state_root(state_root).await;
             let finalized_state_root = arcpay_owner.get_state_root().await;
-            dbg!(&state_root_updated);
             if let Err(_update_err) = state_root_updated {
                 match finalized_state_root {
                     Err(_get_state_err) => {

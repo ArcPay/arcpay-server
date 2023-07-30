@@ -32,7 +32,10 @@ impl ContractOwner {
     pub(crate) async fn update_state_root(&self, state_root: U256) -> Result<()> {
         let tx = self.contract.update_state(state_root);
         let pending_tx = tx.send().await?;
-        let _mined_tx = pending_tx.confirmations(3).await?;
+        let _mined_tx = pending_tx.await?;
+        // TODO change to below before launch. This waits for 3 blocks.
+        // This slows down manual testing.
+        // let _mined_tx = pending_tx.confirmations(3).await?;
         Ok(())
     }
 
