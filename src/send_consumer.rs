@@ -6,6 +6,7 @@ use rln::circuit::Fr;
 use secp256k1::{ecdsa, Message, PublicKey, Secp256k1};
 use sha3::{Digest, Keccak256};
 use tokio::sync::RwLock;
+use tokio_postgres::IsolationLevel;
 
 use crate::{
     contract_owner::ContractOwner,
@@ -115,7 +116,51 @@ pub(crate) async fn send_consumer(
                 }
             }
 
-            // update the finalized merkle tree.
+            // update the finalized merkle tree by copying the proven merkle dbs to finalized dbs.
+            // may be optimized later once we have large tables.
+            {
+                let mut client = mt.db.client.write().await;
+                let tx = client
+                    .build_transaction()
+                    .isolation_level(IsolationLevel::Serializable)
+                    .start()
+                    .await
+                    .expect("send_consumer:final build_transaction.start() error");
+
+                let query = format!(
+                    "TRUNCATE {fin_merkle_table};",
+                    fin_merkle_table = "fin_merkle"
+                );
+
+                let statement = tx.prepare(&query).await.unwrap();
+                tx.execute(&statement, &[]).await.unwrap();
+                let query = format!(
+                    "TRUNCATE {fin_pre_image_table};",
+                    fin_pre_image_table = "fin_pre_image"
+                );
+
+                let statement = tx.prepare(&query).await.unwrap();
+                tx.execute(&statement, &[]).await.unwrap();
+
+                let query = format!(
+                    "INSERT INTO {fin_merkle_table} SELECT * FROM {merkle_table};",
+                    fin_merkle_table = "fin_merkle",
+                    merkle_table = "merkle"
+                );
+
+                let statement = tx.prepare(&query).await.unwrap();
+                tx.execute(&statement, &[]).await.unwrap();
+                let query = format!(
+                    "INSERT INTO {fin_pre_image_table} SELECT * FROM {pre_image_table};",
+                    fin_pre_image_table = "fin_pre_image",
+                    pre_image_table = "pre_image"
+                );
+
+                let statement = tx.prepare(&query).await.unwrap();
+                tx.execute(&statement, &[]).await.unwrap();
+
+                tx.commit().await.expect("fin::copy error");
+            }
         }
     }
 }
