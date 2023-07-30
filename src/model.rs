@@ -261,7 +261,7 @@ impl MutationRoot {
     ) -> Vec<u8> {
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
-
+        dbg!("here");
         let proofs = send_in_merkle(
             &mut mt,
             index,

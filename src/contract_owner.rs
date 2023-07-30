@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use ethers::prelude::{Address, Http, LocalWallet, Provider, SignerMiddleware, U256};
+use ethers::{
+    prelude::{Address, Http, LocalWallet, Provider, SignerMiddleware, U256},
+    signers::Signer,
+};
 
 use crate::{ArcPayContract, ARCPAY_ADDRESS};
 use eyre::Result;
@@ -12,11 +15,14 @@ pub(crate) struct ContractOwner {
 impl ContractOwner {
     pub(crate) async fn new() -> Result<Self> {
         let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
-        let wallet: LocalWallet = "ac0974bec39a17e36ba4a6b4d238ff944b
-        acb478cbed5efcae784d7bf4f2ff80"
-            .parse::<LocalWallet>()
-            .unwrap();
-        let client = Arc::new(SignerMiddleware::new(provider, wallet));
+        let wallet: LocalWallet =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+                .parse::<LocalWallet>()
+                .unwrap();
+        let client = Arc::new(SignerMiddleware::new(
+            provider,
+            wallet.with_chain_id(31337u64),
+        ));
         let contract_address = ARCPAY_ADDRESS.parse::<Address>()?;
         let contract = ArcPayContract::new(contract_address, client);
 

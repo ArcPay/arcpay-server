@@ -331,7 +331,6 @@ impl Hasher for MyPoseidon {
 
 fn to_bytes_vec(from: PgNumeric) -> Vec<u8> {
     let n = from.n.unwrap();
-    println!("{}", n);
     assert!(n.is_integer());
     let (num, scale) = n.as_bigint_and_exponent();
     assert_eq!(scale, 0);

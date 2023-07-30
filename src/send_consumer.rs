@@ -1,7 +1,4 @@
-use ethers::{
-    prelude::U256,
-    providers::{Http, Provider},
-};
+use ethers::prelude::U256;
 use futures_lite::stream::StreamExt;
 use lapin::{options::BasicAckOptions, Consumer};
 use pmtree::Hasher;
@@ -59,6 +56,10 @@ pub(crate) async fn send_consumer(
         let delivery = delivery.expect("error in consumer");
         let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
             .expect("deserialization should be correct");
+        delivery
+            .ack(BasicAckOptions::default())
+            .await
+            .expect("basic_ack");
 
         // Send `mesg` it to be proved (block current thread).
         // Persist proof.
@@ -95,6 +96,7 @@ pub(crate) async fn send_consumer(
 
             let state_root_updated = arcpay_owner.update_state_root(state_root).await;
             let finalized_state_root = arcpay_owner.get_state_root().await;
+            dbg!(&state_root_updated);
             if let Err(_update_err) = state_root_updated {
                 match finalized_state_root {
                     Err(_get_state_err) => {
@@ -113,10 +115,5 @@ pub(crate) async fn send_consumer(
 
             // update the finalized merkle tree.
         }
-
-        delivery
-            .ack(BasicAckOptions::default())
-            .await
-            .expect("basic_ack");
     }
 }
