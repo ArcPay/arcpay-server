@@ -83,10 +83,13 @@ pub(crate) async fn send_consumer(
                 )
                 .await;
             }
-            QueueMessage::Withdraw(withdraw) => {
-                dbg!(withdraw);
+            QueueMessage::Withdraw((leaf, index, sig)) => {
+                mt.set(index, MyPoseidon::default_leaf(), None)
+                    .await
+                    .unwrap();
             }
         }
+
         let state_root = MyPoseidon::serialize(mt.root());
         // drop(mt);
         // Check now - last proof time > MAX_SINCE_LAST_PROOF.
