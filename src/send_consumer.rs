@@ -83,6 +83,9 @@ pub(crate) async fn send_consumer(
                 // Check now - last proof time > MAX_SINCE_LAST_PROOF.
                 // If yes, prove the nova proof for groth16 and issue transaction.
             }
+            QueueMessage::Withdraw(withdraw) => {
+                dbg!(withdraw);
+            }
         }
 
         delivery

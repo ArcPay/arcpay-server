@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio_postgres::NoTls;
 use user_balance::UserBalanceConfig;
 
-use model::{MutationRoot, SendMessageType};
+use model::{MutationRoot, SendMessageType, WithdrawMessageType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -67,6 +67,7 @@ abigen!(ArcPayContract, "ArcPay.json");
 enum QueueMessage {
     Mint { receiver: H160, amount: U256 },
     Send(SendMessageType),
+    Withdraw(WithdrawMessageType),
 }
 
 #[tokio::main]
