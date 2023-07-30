@@ -166,6 +166,11 @@ pub(crate) async fn send_in_merkle(
     sig: &Signature,
     is_return_proof: bool,
 ) -> Option<[Vec<(MyFr, u8)>; 3]> {
+    assert!(
+        leaf.low_coin <= highest_coin_to_send && highest_coin_to_send <= leaf.high_coin,
+        "highest_coin_to_send should be in leaf range"
+    );
+
     let mut proofs: [Vec<(MyFr, u8)>; 3] = [vec![], vec![], vec![]];
 
     ///// Verify signature and public key in `sig` is correct. /////
@@ -191,20 +196,22 @@ pub(crate) async fn send_in_merkle(
         let from_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
         proofs[0] = from_proof;
     }
-
-    mt.set(
-        index as usize,
-        MyPoseidon::hash(&[
-            MyPoseidon::deserialize(sender),
-            Fr::from(highest_coin_to_send + 1), // TODO add zero leaf if the entire leaf is spent.
-            Fr::from(leaf.high_coin),
-        ]),
-        Some(Leaf {
-            address: leaf.address,
-            low_coin: highest_coin_to_send + 1,
-            high_coin: leaf.high_coin,
-        }),
-    )
+    match highest_coin_to_send == leaf.low_coin {
+        true => mt.set(index as usize, MyPoseidon::default_leaf(), None),
+        false => mt.set(
+            index as usize,
+            MyPoseidon::hash(&[
+                MyPoseidon::deserialize(sender),
+                Fr::from(highest_coin_to_send + 1), // invariant: highest_coin_to_send+1 <= leaf.high_coin
+                Fr::from(leaf.high_coin),
+            ]),
+            Some(Leaf {
+                address: leaf.address,
+                low_coin: highest_coin_to_send + 1,
+                high_coin: leaf.high_coin,
+            }),
+        ),
+    }
     .await
     .unwrap();
 
