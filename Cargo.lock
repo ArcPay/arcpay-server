@@ -3057,6 +3057,7 @@ dependencies = [
  "bincode",
  "clap 4.3.11",
  "ethers",
+ "eyre",
  "futures-lite",
  "lapin",
  "num-bigint",

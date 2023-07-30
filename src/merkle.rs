@@ -153,7 +153,7 @@ impl Database for PostgresDBConfig {
     }
 
     async fn get_pre_image(&self, key: DBKey) -> PmtreeResult<Option<Self::PreImage>> {
-        let index = PgNumeric::new(Some(BigDecimal::new(
+        let key = PgNumeric::new(Some(BigDecimal::new(
             BigInt::from_bytes_be(num_bigint::Sign::Plus, &key),
             0,
         )));
@@ -162,14 +162,14 @@ impl Database for PostgresDBConfig {
             "SELECT {pre_image}.owner, {pre_image}.coin_low, {pre_image}.coin_high
             FROM {pre_image} JOIN {merkle}
             ON {pre_image}.leaf = {merkle}.leaf
-            WHERE {pre_image}.leaf=$1",
+            WHERE {merkle}.key=$1",
             pre_image = self.pre_image_table,
             merkle = self.merkle_table
         );
 
         let client = self.client.read().await;
 
-        let rows = client.query(&query, &[&index]).await.unwrap();
+        let rows = client.query(&query, &[&key]).await.unwrap();
         assert!(rows.len() <= 1, "key should be unique");
 
         match rows.len() {
@@ -331,7 +331,6 @@ impl Hasher for MyPoseidon {
 
 fn to_bytes_vec(from: PgNumeric) -> Vec<u8> {
     let n = from.n.unwrap();
-    println!("{}", n);
     assert!(n.is_integer());
     let (num, scale) = n.as_bigint_and_exponent();
     assert_eq!(scale, 0);
