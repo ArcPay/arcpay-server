@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 
 use clap::Parser;
+use eyre::Result; // TODO replace .unwrap() with `?` and `wrap_err` from eyre::Result.
 
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
@@ -22,6 +23,7 @@ use crate::{
     routes::{graphql_handler, graphql_playground, health},
 };
 use pmtree::MerkleTree;
+mod contract_owner;
 mod merkle;
 mod mint;
 mod model;
@@ -71,7 +73,7 @@ enum QueueMessage {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     //////////////// experimental RabbitMQ integration ////////////////
     // Connect to the RabbitMQ server
     let addr = "amqp://guest:guest@localhost:5672/%2f";
@@ -151,7 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proven_client = Arc::new(RwLock::new(proven_client));
 
     let proven_db_config = PostgresDBConfig {
-        client: proven_client.clone(),
+        client: proven_client,
         merkle_table: "merkle".to_string(),
         pre_image_table: "pre_image".to_string(),
     };
@@ -159,16 +161,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mt = match cli.merkle {
         MerkleCommand::New => (
             MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config).await?,
-            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, proven_db_config.clone())
-                .await?,
+            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, proven_db_config).await?,
         ),
         MerkleCommand::Load => (
             MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config).await?,
-            MerkleTree::<PostgresDBConfig, MyPoseidon>::load(proven_db_config.clone()).await?,
+            MerkleTree::<PostgresDBConfig, MyPoseidon>::load(proven_db_config).await?,
         ),
     };
 
-    tokio::spawn(async move { send_consumer::send_consumer(consumer, RwLock::new(mt.1)).await });
+    handles.push(tokio::spawn(async move {
+        send_consumer::send_consumer(consumer, RwLock::new(mt.1)).await
+    }));
 
     let user_balance_db = UserBalanceConfig {
         client,
@@ -197,12 +200,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // if cli.mint {
     let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
-    let contract_address = ARCPAY_ADDRESS.parse::<Address>()?;
 
+    let contract_address: H160 = ARCPAY_ADDRESS.parse::<Address>().unwrap();
     let contract = ArcPayContract::new(contract_address, provider);
+
     let events = contract
         .event::<MintFilter>()
-        .from_block(0)
+        .from_block(0) // TODO: save the last block processed.
         .to_block(BlockNumber::Finalized); // TODO: find the correct `to_block`.
 
     /*
@@ -222,4 +226,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use ethers::utils::hex;
+    use eyre::Result;
+    use pmtree::Hasher;
+    use rln::circuit::Fr;
+    use secp256k1::{Message, Secp256k1, SecretKey};
+    use sha3::{Digest, Keccak256};
+
+    use crate::{merkle::MyPoseidon, model::Leaf};
+    // use super::*;
+    #[test]
+    fn generate_data() -> Result<()> {
+        let secp = Secp256k1::new();
+        let sk1 = SecretKey::from_str(
+            "b4b0bf302506d14eba9970593921a0bd219a10ebf66a0367851a278f9a8c3d08",
+        )?;
+        let pk1 = sk1.public_key(&secp);
+        dbg!(&pk1.serialize_uncompressed());
+        let eth1_addr = hex::decode("8ca4cc18dc867aE7D87473f8460120168a895E7A")?;
+        dbg!(&eth1_addr);
+        assert_eq!(
+            Keccak256::digest(&pk1.serialize_uncompressed()[1..65]).as_slice()[12..],
+            eth1_addr
+        );
+
+        let sk2 = SecretKey::from_str(
+            "b81676dc516f1e4dcec657669e30d31e4454e67aa98574eca670b4509878290c",
+        )?;
+        let pk2 = sk2.public_key(&secp);
+        dbg!(&pk2.serialize_uncompressed());
+        let eth2_addr = hex::decode("2C66bB06B88Bf3aB61aF23E70B0c8bE27b1e5930")?;
+        dbg!(&eth2_addr);
+        assert_eq!(
+            Keccak256::digest(&pk2.serialize_uncompressed()[1..65]).as_slice()[12..],
+            eth2_addr
+        );
+
+        let sk3 = SecretKey::from_str(
+            "2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6",
+        )?;
+        let pk3 = sk3.public_key(&secp);
+        dbg!(&pk3.serialize_uncompressed());
+        let eth3_addr = hex::decode("a0Ee7A142d267C1f36714E4a8F75612F20a79720")?;
+        dbg!(&eth3_addr);
+        assert_eq!(
+            Keccak256::digest(&pk3.serialize_uncompressed()[1..65]).as_slice()[12..],
+            eth3_addr
+        );
+
+        let leaf = Leaf {
+            address: eth1_addr.try_into().unwrap(),
+            low_coin: 0,
+            high_coin: 9,
+        };
+
+        let highest_coin_to_send: u64 = 5;
+        let recipient: [u8; 20] = eth2_addr.try_into().unwrap();
+
+        let mut receiver = vec![0u8; 12];
+        receiver.extend_from_slice(&recipient);
+
+        let msg = MyPoseidon::hash(&[
+            Fr::from(leaf.low_coin),
+            Fr::from(leaf.high_coin),
+            Fr::from(highest_coin_to_send),
+            MyPoseidon::deserialize(receiver.to_owned()),
+        ]);
+
+        let sig = secp.sign_ecdsa(
+            &Message::from_slice(&MyPoseidon::serialize(msg)).unwrap(),
+            &sk1,
+        );
+        dbg!(sig.serialize_compact());
+
+        Ok(())
+    }
 }
