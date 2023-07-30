@@ -82,6 +82,7 @@ pub(crate) struct MyFr(Fr);
 
 pub(crate) type MerkleProof = Vec<(MyFr, u8)>;
 pub(crate) type SendMessageType = (Leaf, usize, u64, [u8; 20], Signature, [MerkleProof; 3]);
+pub(crate) type WithdrawMessageType = (Leaf, usize, Signature);
 
 impl Serialize for MyFr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -170,7 +171,7 @@ pub(crate) async fn send_in_merkle(
     ///// Verify signature and public key in `sig` is correct. /////
     let mut receiver = vec![0u8; 12];
     receiver.extend_from_slice(recipient);
-    verify_ecdsa(&leaf, highest_coin_to_send, &receiver, &sig);
+    verify_ecdsa(leaf, highest_coin_to_send, &receiver, sig);
 
     let hashed_leaf = mt.get(index as usize).await.unwrap();
 
@@ -195,7 +196,7 @@ pub(crate) async fn send_in_merkle(
         index as usize,
         MyPoseidon::hash(&[
             MyPoseidon::deserialize(sender),
-            Fr::from(highest_coin_to_send + 1),
+            Fr::from(highest_coin_to_send + 1), // TODO add zero leaf if the entire leaf is spent.
             Fr::from(leaf.high_coin),
         ]),
         Some(Leaf {
@@ -266,6 +267,7 @@ impl MutationRoot {
         .await
         .ok_or("proofs should be returned")
         .unwrap();
+
         // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 
@@ -278,6 +280,62 @@ impl MutationRoot {
             proofs,
         )))
         .expect("unsafe_send: queue message should be serialized");
+
+        let confirm = channel
+            .basic_publish(
+                "",
+                QUEUE_NAME,
+                BasicPublishOptions {
+                    mandatory: true,
+                    ..BasicPublishOptions::default()
+                },
+                queue_message.as_slice(),
+                BasicProperties::default(),
+            )
+            .await
+            .expect("basic_publish")
+            .await
+            .expect("publisher-confirms");
+
+        assert!(confirm.is_ack());
+        // when `mandatory` is on, if the message is not sent to a queue for any reason
+        // (example, queues are full), the message is returned back.
+        // If the message isn't received back, then a queue has received the message.
+        assert_eq!(confirm.take_message(), None);
+
+        MyPoseidon::serialize(mt.root())
+    }
+
+    async fn withdraw(&self, ctx: &Context<'_>, index: u64, leaf: Leaf, sig: Signature) -> Vec<u8> {
+        verify_ecdsa(&leaf, leaf.high_coin, &[], &sig);
+
+        let api_context = ctx.data_unchecked::<ApiContext>();
+        let mut mt = api_context.mt.write().await;
+
+        let hashed_leaf = mt.get(index as usize).await.unwrap();
+
+        // Verify that sender's leaf is the same as the hash of the input.
+        let mut sender = vec![0u8; 12];
+        sender.extend_from_slice(&leaf.address);
+        assert_eq!(
+            hashed_leaf,
+            MyPoseidon::hash(&[
+                MyPoseidon::deserialize(sender.clone()),
+                Fr::from(leaf.low_coin),
+                Fr::from(leaf.high_coin)
+            ])
+        );
+
+        mt.set(index as usize, MyPoseidon::default_leaf(), None)
+            .await
+            .unwrap();
+
+        // Queue the withdraw request to be received by ZK prover at the other end.
+        let channel = &api_context.channel;
+
+        let queue_message =
+            bincode::serialize(&QueueMessage::Withdraw((leaf, index as usize, sig)))
+                .expect("withdraw: queue message should be serialized");
 
         let confirm = channel
             .basic_publish(
