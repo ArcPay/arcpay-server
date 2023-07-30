@@ -25,7 +25,7 @@ impl QueryRoot {
         MyPoseidon::serialize(mt.root())
     }
 
-    // TODO: add some authentication for user privacy
+    // TODO: add some authentication for user privacy, maybe a signature.
     async fn get_ownership_proofs(&self, ctx: &Context<'_>, address: [u8; 20]) -> Vec<CoinRange> {
         let merkle_db = &ctx.data_unchecked::<ApiContext>().mt.read().await.db;
         merkle_db.get_for_address(&address).await

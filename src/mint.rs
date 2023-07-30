@@ -20,6 +20,7 @@ pub(crate) async fn mint(
     while let Some(Ok(f)) = stream.next().await {
         // check what happens when amount overflows u64.
         let mut mt = mt.write().await;
+        // TODO check what happens when amount overflows u64.
         mint_in_merkle(&mut mt, f.receiver.into(), f.amount.as_u64()).await;
         drop(mt);
         let queue_message = bincode::serialize(&QueueMessage::Mint {

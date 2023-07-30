@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 
 use clap::Parser;
+use eyre::Result; // TODO replace .unwrap() with `?` and `wrap_err` from eyre::Result.
 
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
@@ -22,6 +23,7 @@ use crate::{
     routes::{graphql_handler, graphql_playground, health},
 };
 use pmtree::MerkleTree;
+mod contract_owner;
 mod merkle;
 mod mint;
 mod model;
@@ -71,7 +73,7 @@ enum QueueMessage {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     //////////////// experimental RabbitMQ integration ////////////////
     // Connect to the RabbitMQ server
     let addr = "amqp://guest:guest@localhost:5672/%2f";
@@ -197,9 +199,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // if cli.mint {
     let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
-    let contract_address = ARCPAY_ADDRESS.parse::<Address>()?;
 
+    let contract_address: H160 = ARCPAY_ADDRESS.parse::<Address>().unwrap();
     let contract = ArcPayContract::new(contract_address, provider);
+
     let events = contract
         .event::<MintFilter>()
         .from_block(0)
