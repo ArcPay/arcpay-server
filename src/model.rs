@@ -25,7 +25,7 @@ impl QueryRoot {
         MyPoseidon::serialize(mt.root())
     }
 
-    // TODO: add some authentication for user privacy
+    // TODO: add some authentication for user privacy, maybe a signature.
     async fn get_ownership_proofs(&self, ctx: &Context<'_>, address: [u8; 20]) -> Vec<CoinRange> {
         let merkle_db = &ctx.data_unchecked::<ApiContext>().mt.read().await.db;
         merkle_db.get_for_address(&address).await
@@ -123,14 +123,13 @@ pub(crate) async fn mint_in_merkle(
 
     let num_leaves = mt.leaves_set();
 
+    // TODO (bug) store the max coin in db to determine the new coins.
     let coin_range = match num_leaves {
         0 => (0, amount - 1),
         _ => {
             let last_leaf_index = num_leaves - 1;
-            let key = Key(MERKLE_DEPTH, last_leaf_index);
             let pre_image = mt
-                .db
-                .get_pre_image(key.into())
+                .get_pre_image(last_leaf_index)
                 .await
                 .unwrap()
                 .ok_or("pre_image should exist")
@@ -275,6 +274,9 @@ impl MutationRoot {
         .ok_or("proofs should be returned")
         .unwrap();
 
+        let root = MyPoseidon::serialize(mt.root());
+        drop(mt);
+
         // Queue the send request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 
@@ -310,7 +312,7 @@ impl MutationRoot {
         // If the message isn't received back, then a queue has received the message.
         assert_eq!(confirm.take_message(), None);
 
-        MyPoseidon::serialize(mt.root())
+        root
     }
 
     async fn withdraw(&self, ctx: &Context<'_>, index: u64, leaf: Leaf, sig: Signature) -> Vec<u8> {

@@ -20,6 +20,7 @@ pub(crate) async fn mint(
     while let Some(Ok(f)) = stream.next().await {
         // check what happens when amount overflows u64.
         let mut mt = mt.write().await;
+        // TODO check what happens when amount overflows u64.
         mint_in_merkle(&mut mt, f.receiver.into(), f.amount.as_u64()).await;
         drop(mt);
         let queue_message = bincode::serialize(&QueueMessage::Mint {
@@ -43,10 +44,14 @@ pub(crate) async fn mint(
             .await
             .expect("publisher-confirms");
 
-        assert!(confirm.is_ack());
+        assert!(confirm.is_ack(), "no confirmation on publisher");
         // when `mandatory` is on, if the message is not sent to a queue for any reason
         // (example, queues are full), the message is returned back.
         // If the message isn't received back, then a queue has received the message.
-        assert_eq!(confirm.take_message(), None);
+        assert_eq!(
+            confirm.take_message(),
+            None,
+            "queue didn't receive the mint mesg"
+        );
     }
 }
