@@ -17,10 +17,11 @@ pub(crate) async fn mint(
     mt: Arc<RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>>,
 ) {
     let mut stream = events.stream().await.unwrap();
-    let mut mt = mt.write().await;
     while let Some(Ok(f)) = stream.next().await {
         // check what happens when amount overflows u64.
+        let mut mt = mt.write().await;
         mint_in_merkle(&mut mt, f.receiver.into(), f.amount.as_u64()).await;
+        drop(mt);
         let queue_message = bincode::serialize(&QueueMessage::Mint {
             receiver: f.receiver,
             amount: f.amount,
