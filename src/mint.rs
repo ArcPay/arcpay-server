@@ -44,10 +44,14 @@ pub(crate) async fn mint(
             .await
             .expect("publisher-confirms");
 
-        assert!(confirm.is_ack());
+        assert!(confirm.is_ack(), "no confirmation on publisher");
         // when `mandatory` is on, if the message is not sent to a queue for any reason
         // (example, queues are full), the message is returned back.
         // If the message isn't received back, then a queue has received the message.
-        assert_eq!(confirm.take_message(), None);
+        assert_eq!(
+            confirm.take_message(),
+            None,
+            "queue didn't receive the mint mesg"
+        );
     }
 }

@@ -169,7 +169,9 @@ async fn main() -> Result<()> {
         ),
     };
 
-    tokio::spawn(async move { send_consumer::send_consumer(consumer, RwLock::new(mt.1)).await });
+    handles.push(tokio::spawn(async move {
+        send_consumer::send_consumer(consumer, RwLock::new(mt.1)).await
+    }));
 
     let user_balance_db = UserBalanceConfig {
         client,
@@ -204,7 +206,7 @@ async fn main() -> Result<()> {
 
     let events = contract
         .event::<MintFilter>()
-        .from_block(0)
+        .from_block(0) // TODO: save the last block processed.
         .to_block(BlockNumber::Finalized); // TODO: find the correct `to_block`.
 
     /*
@@ -281,7 +283,7 @@ mod tests {
         let leaf = Leaf {
             address: eth1_addr.try_into().unwrap(),
             low_coin: 0,
-            high_coin: 10,
+            high_coin: 9,
         };
 
         let highest_coin_to_send: u64 = 5;

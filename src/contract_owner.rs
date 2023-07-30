@@ -31,7 +31,6 @@ impl ContractOwner {
 
     pub(crate) async fn update_state_root(&self, state_root: U256) -> Result<()> {
         let tx = self.contract.update_state(state_root);
-        dbg!(&tx);
         let pending_tx = tx.send().await?;
         let _mined_tx = pending_tx.confirmations(3).await?;
         Ok(())

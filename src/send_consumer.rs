@@ -53,6 +53,7 @@ pub(crate) async fn send_consumer(
 ) {
     let arcpay_owner = ContractOwner::new().await.unwrap();
     while let Some(delivery) = consumer.next().await {
+        dbg!("hrrr");
         let delivery = delivery.expect("error in consumer");
         let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
             .expect("deserialization should be correct");
@@ -65,6 +66,7 @@ pub(crate) async fn send_consumer(
         // Persist proof.
 
         let mut mt = mt.write().await;
+        dbg!(&mesg);
         match mesg {
             QueueMessage::Mint { receiver, amount } => {
                 dbg!(receiver, amount);
@@ -88,10 +90,11 @@ pub(crate) async fn send_consumer(
                 dbg!(withdraw);
             }
         }
+        let state_root = MyPoseidon::serialize(mt.root());
+        // drop(mt);
         // Check now - last proof time > MAX_SINCE_LAST_PROOF.
         // If yes, prove the nova proof for groth16 and then issue the below transaction:
         {
-            let state_root = MyPoseidon::serialize(mt.root());
             let state_root = U256::from_big_endian(&state_root);
 
             let state_root_updated = arcpay_owner.update_state_root(state_root).await;
@@ -100,7 +103,7 @@ pub(crate) async fn send_consumer(
             if let Err(_update_err) = state_root_updated {
                 match finalized_state_root {
                     Err(_get_state_err) => {
-                        // issue alert, maybe pagerduty.
+                        todo!("issue alert; keep building on the same proof and retry on the same iteration");
                         // keep building on the same proof and retry in the next iteration.
                     }
                     Ok(root) => {
