@@ -67,9 +67,9 @@ pub(crate) async fn send_consumer(
 
         let mut mt = mt.write().await;
         match mesg {
-            QueueMessage::Mint { receiver, amount } => {
+            QueueMessage::Mint(leaf) => {
                 // TODO check what happens when amount overflows u64.
-                mint_in_merkle(&mut mt, receiver.into(), amount.as_u64()).await;
+                mint_in_merkle(&mut mt, leaf).await;
             }
             QueueMessage::Send(send) => {
                 let (leaf, index, highest_coin_to_send, recipient, sig, proofs) = send;

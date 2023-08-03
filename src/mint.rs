@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 use crate::{
     arc_pay_contract,
     merkle::{MyPoseidon, PostgresDBConfig},
-    model::mint_in_merkle,
+    model::{mint_in_merkle, Leaf},
     QueueMessage, QUEUE_NAME,
 };
 
@@ -21,13 +21,14 @@ pub(crate) async fn mint(
         // check what happens when amount overflows u64.
         let mut mt = mt.write().await;
         // TODO check what happens when amount overflows u64.
-        mint_in_merkle(&mut mt, f.receiver.into(), f.amount.as_u64()).await;
+        let leaf = Leaf {
+            address: f.receiver.into(),
+            low_coin: f.low_coin.as_u64(),
+            high_coin: f.high_coin.as_u64(),
+        };
+        mint_in_merkle(&mut mt, leaf.clone()).await;
         drop(mt);
-        let queue_message = bincode::serialize(&QueueMessage::Mint {
-            receiver: f.receiver,
-            amount: f.amount,
-        })
-        .unwrap();
+        let queue_message = bincode::serialize(&QueueMessage::Mint(leaf)).unwrap();
         let confirm = channel
             .basic_publish(
                 "",

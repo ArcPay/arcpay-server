@@ -44,7 +44,7 @@ pub(crate) struct MutationRoot;
 
 /// Leaf structure of the merkle tree.
 /// `address` owns the coin range `[low_coin, high_coin]`.
-#[derive(Debug, InputObject, Serialize, Deserialize)]
+#[derive(Debug, Clone, InputObject, Serialize, Deserialize)]
 pub(crate) struct Leaf {
     pub address: [u8; 20],
     pub low_coin: u64,
@@ -116,34 +116,10 @@ fn to_my_fr(from: Vec<(Fr, u8)>) -> Vec<(MyFr, u8)> {
 
 pub(crate) async fn mint_in_merkle(
     mt: &mut RwLockWriteGuard<'_, MerkleTree<PostgresDBConfig, MyPoseidon>>,
-    recipient: [u8; 20],
-    amount: u64,
+    leaf: Leaf,
 ) -> MerkleInfo {
-    assert!(amount > 0, "amount should be > 0");
+    assert!(leaf.low_coin <= leaf.high_coin);
 
-    let num_leaves = mt.leaves_set();
-
-    // TODO (bug) store the max coin in db to determine the new coins.
-    let coin_range = match num_leaves {
-        0 => (0, amount - 1),
-        _ => {
-            let last_leaf_index = num_leaves - 1;
-            let pre_image = mt
-                .get_pre_image(last_leaf_index)
-                .await
-                .unwrap()
-                .ok_or("pre_image should exist")
-                .unwrap();
-
-            (pre_image.high_coin + 1, pre_image.high_coin + amount)
-        }
-    };
-
-    let leaf = Leaf {
-        address: recipient,
-        low_coin: coin_range.0,
-        high_coin: coin_range.1,
-    };
     let hash = MyPoseidon::hash(&[
         MyPoseidon::deserialize(leaf.address.into()),
         Fr::from(leaf.low_coin),
