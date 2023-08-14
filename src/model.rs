@@ -2,7 +2,7 @@ use tokio::sync::RwLockWriteGuard;
 
 use async_graphql::{Context, EmptySubscription, InputObject, Object, Schema, SimpleObject};
 use lapin::{options::BasicPublishOptions, BasicProperties};
-use pmtree::{tree::Key, Database, Hasher, MerkleTree};
+use pmtree::{Hasher, MerkleTree};
 use rln::circuit::Fr;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
@@ -10,7 +10,7 @@ use serde_with::serde_as;
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
     send_consumer::verify_ecdsa,
-    ApiContext, QueueMessage, MERKLE_DEPTH, QUEUE_NAME,
+    ApiContext, QueueMessage, QUEUE_NAME,
 };
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
