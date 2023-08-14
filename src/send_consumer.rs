@@ -52,6 +52,7 @@ pub(crate) async fn send_consumer(
     mut consumer: Consumer,
     mt: RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>,
 ) {
+    let mut mint_time: U256 = U256::default();
     let arcpay_owner = ContractOwner::new().await.unwrap();
     while let Some(delivery) = consumer.next().await {
         let delivery = delivery.expect("error in consumer");
@@ -67,7 +68,8 @@ pub(crate) async fn send_consumer(
 
         let mut mt = mt.write().await;
         match mesg {
-            QueueMessage::Mint(leaf) => {
+            QueueMessage::Mint((leaf, timestamp)) => {
+                mint_time = timestamp;
                 // TODO check what happens when amount overflows u64.
                 mint_in_merkle(&mut mt, leaf).await;
             }
@@ -98,9 +100,10 @@ pub(crate) async fn send_consumer(
         {
             let state_root = U256::from_big_endian(&state_root);
 
-            let state_root_updated = arcpay_owner.update_state_root(state_root).await;
+            let state_root_updated = arcpay_owner.update_state_root(state_root, mint_time).await;
             let finalized_state_root = arcpay_owner.get_state_root().await;
             if let Err(_update_err) = state_root_updated {
+                dbg!(&_update_err);
                 match finalized_state_root {
                     Err(_get_state_err) => {
                         todo!("issue alert; keep building on the same proof and retry on the same iteration");
