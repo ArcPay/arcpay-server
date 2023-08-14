@@ -51,6 +51,7 @@ struct ApiContext {
     user_balance_db: UserBalanceConfig,
     mt: Arc<RwLock<MerkleTree<PostgresDBConfig, MyPoseidon>>>,
     channel: Arc<Channel>,
+    merkle_db: PostgresDBConfig,
 }
 
 const MERKLE_DEPTH: usize = 32; // TODO: read in from parameters file
