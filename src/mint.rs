@@ -16,9 +16,12 @@ pub(crate) async fn mint(
     channel: Arc<Channel>,
     mt: Arc<RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>>,
 ) {
+    dbg!("inmint");
     // see tracking past vs future events: https://github.com/gakonst/ethers-rs/issues/988
     let z = contract.event::<MintFilter>();
     let mut stream = z.stream().await.unwrap();
+    dbg!("onmint");
+    // see tracking past vs future events: https://github.com/gakonst/ethers-rs/issues/988
 
     while let Some(Ok(f)) = stream.next().await {
         dbg!(&f);

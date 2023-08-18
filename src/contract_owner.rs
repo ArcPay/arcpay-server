@@ -14,14 +14,14 @@ pub(crate) struct ContractOwner {
 
 impl ContractOwner {
     pub(crate) async fn new() -> Result<Self> {
-        let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
+        let provider = Arc::new(Provider::<Http>::try_from("https://twilight-cosmological-shadow.ethereum-sepolia.discover.quiknode.pro/b324db2b9a4c678722d4d294d2e1e160d6840335/")?);
         let wallet: LocalWallet =
-            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+            "0x496d9e930e4a133fc73b71314f8f7305be5d52eeb161f45e822bf07764b1a4be"
                 .parse::<LocalWallet>()
                 .unwrap();
         let client = Arc::new(SignerMiddleware::new(
             provider,
-            wallet.with_chain_id(31337u64),
+            wallet.with_chain_id(11155111u64),
         ));
         let contract_address = ARCPAY_ADDRESS.parse::<Address>()?;
         let contract = ArcPayContract::new(contract_address, client);

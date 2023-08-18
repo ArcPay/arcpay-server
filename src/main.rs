@@ -54,7 +54,7 @@ struct ApiContext {
 }
 
 const MERKLE_DEPTH: usize = 32; // TODO: read in from parameters file
-const ARCPAY_ADDRESS: &str = "0x1C1cE2490982F82Fd8EfA9aa9c8982FBC6818D94";
+const ARCPAY_ADDRESS: &str = "0x82B766D0a234489a299BBdA3DBe6ba206d77D35F";
 
 const QUEUE_NAME: &str = "user_requests";
 
@@ -199,7 +199,7 @@ async fn main() -> Result<()> {
     // }
 
     // if cli.mint {
-    let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
+    let provider = Arc::new(Provider::<Http>::try_from("https://rpc2.sepolia.org")?);
 
     let contract_address: H160 = ARCPAY_ADDRESS.parse::<Address>().unwrap();
     let contract = ArcPayContract::new(contract_address, provider);
