@@ -1,15 +1,22 @@
 use async_graphql::{EmptySubscription, Schema};
 use ethers::prelude::*;
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
-use axum::{extract::Extension, routing::get, Router, Server};
+use crate::observability::metrics::{create_prometheus_recorder, track_metrics};
+use crate::observability::tracing::create_tracer_from_env;
+use axum::{extract::Extension, middleware, routing::get, Router, Server};
 use lapin::Channel;
-use serde::{Deserialize, Serialize};
-use tokio_postgres::NoTls;
-use user_balance::UserBalanceConfig;
-
 use model::{Leaf, MutationRoot, SendMessageType, WithdrawMessageType};
+use serde::{Deserialize, Serialize};
+use std::future::ready;
 use std::sync::Arc;
+use tokio::signal;
 use tokio::sync::RwLock;
+use tokio_postgres::NoTls;
+use tracing::info;
+use tracing_subscriber::Registry;
+use user_balance::UserBalanceConfig;
 
 use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 
@@ -27,6 +34,7 @@ mod contract_owner;
 mod merkle;
 mod mint;
 mod model;
+mod observability;
 mod routes;
 mod send_consumer;
 mod user_balance;
@@ -70,6 +78,32 @@ enum QueueMessage {
     Mint((Leaf, U256)),
     Send(SendMessageType),
     Withdraw(WithdrawMessageType),
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    opentelemetry::global::shutdown_tracer_provider();
 }
 
 #[tokio::main]
@@ -186,19 +220,38 @@ async fn main() -> Result<()> {
             channel: channel.clone(),
         })
         .finish();
+
+    let prometheus_recorder = create_prometheus_recorder();
+    let registry = Registry::default().with(tracing_subscriber::fmt::layer().pretty());
+
+    match create_tracer_from_env() {
+        Some(tracer) => registry
+            .with(tracing_opentelemetry::layer().with_tracer(tracer))
+            .try_init()
+            .expect("Failed to register tracer with registry"),
+        None => registry
+            .try_init()
+            .expect("Failed to register tracer with registry"),
+    }
+
+    info!("GraphQL service starting");
+
     let app = Router::new()
         .route("/", get(graphql_playground).post(graphql_handler))
         .route("/health", get(health))
+        .route("/metrics", get(move || ready(prometheus_recorder.render())))
+        .route_layer(middleware::from_fn(track_metrics))
         .layer(Extension(schema));
+
     handles.push(tokio::spawn(async move {
         Server::bind(&"0.0.0.0:8000".parse().unwrap())
             .serve(app.into_make_service())
+            .with_graceful_shutdown(shutdown_signal())
             .await
             .unwrap()
     }));
     // }
 
-    // if cli.mint {
     let provider = Arc::new(Provider::<Http>::try_from("http://127.0.0.1:8545")?);
 
     let contract_address: H160 = ARCPAY_ADDRESS.parse::<Address>().unwrap();
@@ -208,17 +261,9 @@ async fn main() -> Result<()> {
     // .from_block(17915100) // TODO: save the last block processed.
     // .to_block(BlockNumber::Latest); // TODO: find the correct `to_block`.
 
-    /*
-    Here's another way of watching for events:
-    let abi: Abi = serde_json::from_slice(include_bytes!("../ArcPay.json"))?;
-    let contract = Contract::new(contract_address, abi, provider.clone());
-    let event = contract.event_for_name("Mint")?;
-    let filter = event.filter.from_block(0).to_block(BlockNumber::Finalized);
-    */
     handles.push(tokio::spawn(async move {
         mint(contract, channel.clone(), cur_merkle_tree.clone()).await
     }));
-    // }
 
     for handle in handles {
         handle.await.expect("joined task panicked");
