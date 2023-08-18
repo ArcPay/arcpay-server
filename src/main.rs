@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio_postgres::NoTls;
 use user_balance::UserBalanceConfig;
 
-use model::{MutationRoot, SendMessageType, WithdrawMessageType};
+use model::{Leaf, MutationRoot, SendMessageType, WithdrawMessageType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -54,7 +54,7 @@ struct ApiContext {
 }
 
 const MERKLE_DEPTH: usize = 32; // TODO: read in from parameters file
-const ARCPAY_ADDRESS: &str = "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9";
+const ARCPAY_ADDRESS: &str = "0x1C1cE2490982F82Fd8EfA9aa9c8982FBC6818D94";
 
 const QUEUE_NAME: &str = "user_requests";
 
@@ -67,7 +67,7 @@ abigen!(ArcPayContract, "ArcPay.json");
 
 #[derive(Debug, Serialize, Deserialize)]
 enum QueueMessage {
-    Mint { receiver: H160, amount: U256 },
+    Mint((Leaf, U256)),
     Send(SendMessageType),
     Withdraw(WithdrawMessageType),
 }
@@ -204,10 +204,9 @@ async fn main() -> Result<()> {
     let contract_address: H160 = ARCPAY_ADDRESS.parse::<Address>().unwrap();
     let contract = ArcPayContract::new(contract_address, provider);
 
-    let events = contract
-        .event::<MintFilter>()
-        .from_block(0) // TODO: save the last block processed.
-        .to_block(BlockNumber::Finalized); // TODO: find the correct `to_block`.
+    // let events = ;
+    // .from_block(17915100) // TODO: save the last block processed.
+    // .to_block(BlockNumber::Latest); // TODO: find the correct `to_block`.
 
     /*
     Here's another way of watching for events:
@@ -217,7 +216,7 @@ async fn main() -> Result<()> {
     let filter = event.filter.from_block(0).to_block(BlockNumber::Finalized);
     */
     handles.push(tokio::spawn(async move {
-        mint(events, channel.clone(), cur_merkle_tree.clone()).await
+        mint(contract, channel.clone(), cur_merkle_tree.clone()).await
     }));
     // }
 

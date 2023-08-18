@@ -7,27 +7,32 @@ use tokio::sync::RwLock;
 use crate::{
     arc_pay_contract,
     merkle::{MyPoseidon, PostgresDBConfig},
-    model::mint_in_merkle,
-    QueueMessage, QUEUE_NAME,
+    model::{mint_in_merkle, Leaf},
+    MintFilter, QueueMessage, QUEUE_NAME,
 };
 
 pub(crate) async fn mint(
-    events: Event<Arc<Provider<Http>>, Provider<Http>, arc_pay_contract::MintFilter>,
+    contract: arc_pay_contract::ArcPayContract<Provider<Http>>,
     channel: Arc<Channel>,
     mt: Arc<RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>>,
 ) {
-    let mut stream = events.stream().await.unwrap();
+    // see tracking past vs future events: https://github.com/gakonst/ethers-rs/issues/988
+    let z = contract.event::<MintFilter>();
+    let mut stream = z.stream().await.unwrap();
+
     while let Some(Ok(f)) = stream.next().await {
+        dbg!(&f);
         // check what happens when amount overflows u64.
         let mut mt = mt.write().await;
         // TODO check what happens when amount overflows u64.
-        mint_in_merkle(&mut mt, f.receiver.into(), f.amount.as_u64()).await;
+        let leaf = Leaf {
+            address: f.receiver.into(),
+            low_coin: f.low_coin.as_u64(),
+            high_coin: f.high_coin.as_u64(),
+        };
+        mint_in_merkle(&mut mt, leaf.clone()).await;
         drop(mt);
-        let queue_message = bincode::serialize(&QueueMessage::Mint {
-            receiver: f.receiver,
-            amount: f.amount,
-        })
-        .unwrap();
+        let queue_message = bincode::serialize(&QueueMessage::Mint((leaf, f.timestamp))).unwrap();
         let confirm = channel
             .basic_publish(
                 "",
@@ -54,4 +59,5 @@ pub(crate) async fn mint(
             "queue didn't receive the mint mesg"
         );
     }
+    dbg!("finished");
 }

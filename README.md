@@ -3,7 +3,10 @@
 - Create a local rabbitMQ server with default settings:
   - Should be accessible at `amqp://guest:guest@localhost:5672`.
   - You can open `http://localhost:15672/` and use `guest` as username & password.
-- Run `cargo run -- --rabbitmq` to send and receive messages to this queue.
+- On macbook, this may work:
+  ```
+  CONF_ENV_FILE="/opt/homebrew/etc/rabbitmq/rabbitmq-env.conf" /opt/homebrew/opt/rabbitmq/sbin/rabbitmq-server
+  ```
 
 ## Postgres DB setup
 - Install postgresql locally.
