@@ -5,6 +5,7 @@ use axum::{extract::Extension, routing::get, Router, Server};
 use lapin::Channel;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::NoTls;
+use tower_http::cors::{Any, CorsLayer};
 use user_balance::UserBalanceConfig;
 
 use model::{Leaf, MutationRoot, SendMessageType, WithdrawMessageType};
@@ -186,10 +187,13 @@ async fn main() -> Result<()> {
             channel: channel.clone(),
         })
         .finish();
+    let cors = CorsLayer::new().allow_methods(Any).allow_origin(Any);
     let app = Router::new()
         .route("/", get(graphql_playground).post(graphql_handler))
         .route("/health", get(health))
+        .layer(cors)
         .layer(Extension(schema));
+
     handles.push(tokio::spawn(async move {
         Server::bind(&"0.0.0.0:8000".parse().unwrap())
             .serve(app.into_make_service())
