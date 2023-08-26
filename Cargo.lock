@@ -3066,6 +3066,7 @@ dependencies = [
  "eyre",
  "futures-lite",
  "lapin",
+ "lazy_static",
  "num-bigint",
  "pg_bigdecimal",
  "pmtree 1.0.0 (git+https://github.com/arcpay/pmtree?rev=577f222fd22d68ea33c3903d7eaf19f9ea24083e)",

@@ -1,3 +1,4 @@
+use ethers::types::Address;
 use tokio::sync::RwLockWriteGuard;
 
 use async_graphql::{Context, EmptySubscription, InputObject, Object, Schema, SimpleObject};
@@ -62,10 +63,21 @@ pub(crate) struct CoinRange {
 #[serde_as]
 #[derive(Debug, InputObject, Serialize, Deserialize)]
 pub(crate) struct Signature {
-    #[serde_as(as = "[_; 64]")]
-    pub sig: [u8; 64],
-    #[serde_as(as = "[_; 65]")]
-    pub pubkey: [u8; 65],
+    #[serde_as(as = "[_; 32]")]
+    pub r: [u8; 32],
+    #[serde_as(as = "[_; 32]")]
+    pub s: [u8; 32],
+    pub v: u64,
+}
+
+impl From<Signature> for ethers::prelude::Signature {
+    fn from(sig: Signature) -> Self {
+        ethers::prelude::Signature {
+            r: sig.r.into(),
+            s: sig.r.into(),
+            v: sig.v,
+        }
+    }
 }
 
 #[derive(Debug, SimpleObject, Serialize, Deserialize)]
@@ -81,8 +93,8 @@ pub(crate) struct MerkleInfo {
 pub(crate) struct MyFr(Fr);
 
 pub(crate) type MerkleProof = Vec<(MyFr, u8)>;
-pub(crate) type SendMessageType = (Leaf, usize, u64, [u8; 20], Signature, [MerkleProof; 3]);
-pub(crate) type WithdrawMessageType = (Leaf, usize, Signature);
+pub(crate) type SendMessageType = (Leaf, usize, u64, [u8; 20], [MerkleProof; 3]);
+pub(crate) type WithdrawMessageType = (Leaf, usize);
 
 impl Serialize for MyFr {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -138,7 +150,6 @@ pub(crate) async fn send_in_merkle(
     leaf: &Leaf,
     highest_coin_to_send: u64,
     recipient: &[u8; 20],
-    sig: &Signature,
     is_return_proof: bool,
 ) -> Option<[Vec<(MyFr, u8)>; 3]> {
     assert!(
@@ -151,7 +162,6 @@ pub(crate) async fn send_in_merkle(
     ///// Verify signature and public key in `sig` is correct. /////
     let mut receiver = vec![0u8; 12];
     receiver.extend_from_slice(recipient);
-    // verify_ecdsa(leaf, highest_coin_to_send, &receiver, sig);
 
     let hashed_leaf = mt.get(index as usize).await.unwrap();
 
@@ -237,13 +247,13 @@ impl MutationRoot {
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
 
+        verify_ecdsa(&leaf, highest_coin_to_send, &recipient, sig);
         let proofs = send_in_merkle(
             &mut mt,
             index,
             &leaf,
             highest_coin_to_send,
             &recipient,
-            &sig,
             true,
         )
         .await
@@ -261,7 +271,6 @@ impl MutationRoot {
             index as usize,
             highest_coin_to_send,
             recipient,
-            sig,
             proofs,
         )))
         .expect("unsafe_send: queue message should be serialized");
@@ -292,7 +301,8 @@ impl MutationRoot {
     }
 
     async fn withdraw(&self, ctx: &Context<'_>, index: u64, leaf: Leaf, sig: Signature) -> Vec<u8> {
-        verify_ecdsa(&leaf, leaf.high_coin, &[], &sig);
+        let zero_addr = Address::default(); // TODO confirm
+        verify_ecdsa(&leaf, leaf.high_coin, &zero_addr.into(), sig);
 
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
@@ -318,9 +328,8 @@ impl MutationRoot {
         // Queue the withdraw request to be received by ZK prover at the other end.
         let channel = &api_context.channel;
 
-        let queue_message =
-            bincode::serialize(&QueueMessage::Withdraw((leaf, index as usize, sig)))
-                .expect("withdraw: queue message should be serialized");
+        let queue_message = bincode::serialize(&QueueMessage::Withdraw((leaf, index as usize)))
+            .expect("withdraw: queue message should be serialized");
 
         let confirm = channel
             .basic_publish(

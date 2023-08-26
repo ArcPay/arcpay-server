@@ -1,50 +1,59 @@
-use ethers::prelude::U256;
+use ethers::types::transaction::eip712::Eip712;
+
+use ethers::{
+    prelude::{Eip712, EthAbiType, U256},
+    types::Address,
+};
 use futures_lite::stream::StreamExt;
 use lapin::{options::BasicAckOptions, Consumer};
 use pmtree::Hasher;
-use rln::circuit::Fr;
-use secp256k1::{ecdsa, Message, PublicKey, Secp256k1};
-use sha3::{Digest, Keccak256};
+
 use tokio::sync::RwLock;
 use tokio_postgres::IsolationLevel;
 
+use crate::QueueMessage;
 use crate::{
     contract_owner::ContractOwner,
     merkle::{MyPoseidon, PostgresDBConfig},
     model::{mint_in_merkle, Leaf},
     model::{send_in_merkle, Signature},
 };
-use crate::{QueueMessage, MAX_SINCE_LAST_PROVE};
 
+#[derive(Eip712, EthAbiType, Clone)]
+#[eip712(
+    name = "ArcPay",
+    version = "0",
+    chain_id = 11155111,
+    verifying_contract = "0x82B766D0a234489a299BBdA3DBe6ba206d77D35F"
+)]
+struct Send712 {
+    owner: Address,
+    low_coin: U256,
+    high_coin: U256,
+    highest_coin_to_send: U256,
+    receiver: Address,
+}
 /// Verify signature and public key in `sig` is correct.
 pub(crate) fn verify_ecdsa(
     leaf: &Leaf,
     highest_coin_to_send: u64,
-    receiver: &[u8],
-    sig: &Signature,
+    receiver: &[u8; 20],
+    sig: Signature,
 ) {
-    let msg = MyPoseidon::hash(&[
-        Fr::from(leaf.low_coin),
-        Fr::from(leaf.high_coin),
-        Fr::from(highest_coin_to_send),
-        MyPoseidon::deserialize(receiver.to_owned()),
-    ]);
+    let receiver: Address = receiver.into();
+    let msg = Send712 {
+        owner: leaf.address.into(),
+        low_coin: leaf.low_coin.into(),
+        high_coin: leaf.high_coin.into(),
+        highest_coin_to_send: highest_coin_to_send.into(),
+        receiver,
+    };
 
-    // Verify signature is correct.
-    let secp = Secp256k1::verification_only();
-    assert!(secp
-        .verify_ecdsa(
-            &Message::from_slice(&MyPoseidon::serialize(msg)).unwrap(),
-            &ecdsa::Signature::from_compact(&sig.sig).unwrap(),
-            &PublicKey::from_slice(&sig.pubkey).unwrap(),
-        )
-        .is_ok());
+    let msg_hash = msg.encode_eip712().unwrap();
 
-    assert_eq!(
-        Keccak256::digest(&sig.pubkey[1..65]).as_slice()[12..],
-        leaf.address,
-        "address doesn't match"
-    );
+    let ethsig = ethers::prelude::Signature::from(sig);
+    let signer = ethsig.recover(msg_hash).unwrap();
+    assert_eq!(signer, receiver);
 }
 
 // Run this in a separate thread.
@@ -74,19 +83,18 @@ pub(crate) async fn send_consumer(
                 mint_in_merkle(&mut mt, leaf).await;
             }
             QueueMessage::Send(send) => {
-                let (leaf, index, highest_coin_to_send, recipient, sig, proofs) = send;
+                let (leaf, index, highest_coin_to_send, recipient, proofs) = send;
                 send_in_merkle(
                     &mut mt,
                     index as u64,
                     &leaf,
                     highest_coin_to_send,
                     &recipient,
-                    &sig,
                     false,
                 )
                 .await;
             }
-            QueueMessage::Withdraw((leaf, index, sig)) => {
+            QueueMessage::Withdraw((leaf, index)) => {
                 mt.set(index, MyPoseidon::default_leaf(), None)
                     .await
                     .unwrap();
