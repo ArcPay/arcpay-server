@@ -74,7 +74,7 @@ impl From<Signature> for ethers::prelude::Signature {
     fn from(sig: Signature) -> Self {
         ethers::prelude::Signature {
             r: sig.r.into(),
-            s: sig.r.into(),
+            s: sig.s.into(),
             v: sig.v,
         }
     }
