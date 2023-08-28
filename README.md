@@ -3,7 +3,7 @@
 - Create a local rabbitMQ server with default settings:
   - Should be accessible at `amqp://guest:guest@localhost:5672`.
   - You can open `http://localhost:15672/` and use `guest` as username & password.
-- On macbook, this may work:
+- On macbook, this may work to start the rabbit-mq server:
   ```
   CONF_ENV_FILE="/opt/homebrew/etc/rabbitmq/rabbitmq-env.conf" /opt/homebrew/opt/rabbitmq/sbin/rabbitmq-server
   ```
@@ -12,8 +12,9 @@
 - Install postgresql locally.
 - Run `psql`.
 - Create a user `dev` to manage db.
-- Create arcpay database which will host all our tables: `create databse arcpay`.
-- Run `cargo run -- --merkle new` to create a `test` table with configuration:
+- Create arcpay database which will host all our tables: `create database arcpay` and `create database proven_arcpay`.
+- Copy ABI file to server repo. So something like this: `cp arcpay/out/ArcPay.sol/ArcPay.json ../arcpay-server`.
+- Running `cargo run -- --merkle new` will delete existing tables and create them again.
   ```sql
   CREATE TABLE test (
     leaf NUMERIC(78,0) NOT NULL, -- 32 bytes
@@ -21,7 +22,14 @@
     PRIMARY KEY (index)
   );
   ```
-- If you have already set up these DB tables previously, the command will terminate with an error. In that case, run `cargo run -- --merkle load` to set up connection to the DB.
+- run `cargo run -- --merkle load` if you want to use existing tables.
+
+
+Some gotchas:
+- Update the existing arcpay address with your newly deployed address (search and replace).
+
+Ignore from here:
+-------
 
 ## GraphQL server setup
 reference for graphql server: https://oliverjumpertz.com/how-to-build-a-powerful-graphql-api-with-rust/
