@@ -11,8 +11,8 @@
 ## Postgres DB setup
 - Install postgresql locally.
 - Run `psql`.
-- Create a user `dev` to manage db.
-- Create arcpay database which will host all our tables: `create database arcpay` and `create database proven_arcpay`.
+- Create a user `dev` to manage db with `create user dev;`.
+- Create arcpay database which will host all our tables: `create database arcpay;` and `create database proven_arcpay;`.
 - Copy ABI file to server repo. So something like this: `cp arcpay/out/ArcPay.sol/ArcPay.json ../arcpay-server`.
 - Running `cargo run -- --merkle new` will delete existing tables and create them again.
   ```sql
