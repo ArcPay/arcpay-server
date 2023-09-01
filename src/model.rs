@@ -181,7 +181,7 @@ pub(crate) async fn send_in_merkle(
         let from_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
         proofs[0] = from_proof;
     }
-    match highest_coin_to_send == leaf.low_coin {
+    match highest_coin_to_send == leaf.high_coin {
         true => mt.set(index as usize, MyPoseidon::default_leaf(), None),
         false => mt.set(
             index as usize,
