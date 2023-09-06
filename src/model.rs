@@ -61,7 +61,7 @@ pub(crate) struct CoinRange {
 
 // `serde` crate can't serialize large arrays, hence using specially designed `serde_with`.
 #[serde_as]
-#[derive(Debug, InputObject, Serialize, Deserialize)]
+#[derive(Debug, InputObject, Serialize, Deserialize, Clone)]
 pub(crate) struct Signature {
     #[serde_as(as = "[_; 32]")]
     pub r: [u8; 32],

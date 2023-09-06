@@ -30,6 +30,7 @@ mod mint;
 mod model;
 mod routes;
 mod send_consumer;
+mod transactions;
 mod user_balance;
 
 #[derive(Parser, Debug)]
