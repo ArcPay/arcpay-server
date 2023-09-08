@@ -51,7 +51,7 @@ impl PrimitiveTransaction {
                 upper_bound: self.upper_bound,
                 fee_upper_bound: self.fee_upper_bound,
             })
-        } else if self.high_coin < self.fee_upper_bound {
+        } else if self.high_coin + 1 < self.fee_upper_bound { // TODO: make high_coin exclusive in the Merkle tree to avoid off by one issues
             Err(PrimitiveTransactionError::UnavailabeFunds {
                 high_coin: self.high_coin,
                 fee_upper_bound: self.fee_upper_bound,
