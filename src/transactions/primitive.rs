@@ -18,6 +18,7 @@ pub struct PrimitiveTransaction {
     receiver: [u8; 20],
     leaf_id: u64,
     low_coin: u64,
+    high_coin: u64,
     upper_bound: u64,
     fee_upper_bound: u64,
 }
@@ -30,6 +31,10 @@ pub enum PrimitiveTransactionError {
     },
     NegativeFee {
         upper_bound: u64,
+        fee_upper_bound: u64,
+    },
+    UnavailabeFunds {
+        high_coin: u64,
         fee_upper_bound: u64,
     },
 }
@@ -46,6 +51,11 @@ impl PrimitiveTransaction {
                 upper_bound: self.upper_bound,
                 fee_upper_bound: self.fee_upper_bound,
             })
+        } else if self.high_coin < self.fee_upper_bound {
+            Err(PrimitiveTransactionError::UnavailabeFunds {
+                high_coin: self.high_coin,
+                fee_upper_bound: self.fee_upper_bound,
+            })
         } else {
             Ok(())
         }
@@ -57,6 +67,7 @@ impl PrimitiveTransaction {
             MyPoseidon::deserialize(self.receiver.to_vec()),
             Fr::from(self.leaf_id),
             Fr::from(self.low_coin),
+            Fr::from(self.high_coin),
             Fr::from(self.upper_bound),
             Fr::from(self.fee_upper_bound),
         ])
@@ -77,6 +88,10 @@ impl PrimitiveTransaction {
 
     pub fn low_coin(&self) -> u64 {
         self.low_coin
+    }
+
+    pub fn high_coin(&self) -> u64 {
+        self.high_coin
     }
 
     pub fn upper_bound(&self) -> u64 {

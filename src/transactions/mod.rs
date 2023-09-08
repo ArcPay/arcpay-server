@@ -1,7 +1,7 @@
 use self::primitive::PrimitiveTransaction;
 
-mod multicoin;
-mod primitive;
+pub mod multicoin;
+pub mod primitive;
 
 pub trait RichTransaction {
     type Error: std::fmt::Debug; // TODO: do we also need to implement Error, Send, and Sync?

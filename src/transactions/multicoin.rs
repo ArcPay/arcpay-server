@@ -1,8 +1,11 @@
 use crate::{merkle::MyPoseidon, model::Signature};
 use async_graphql::InputObject;
-use ethers::prelude::{Eip712, EthAbiType};
 use ethers::types::transaction::eip712::Eip712;
-use ethers::types::SignatureError;
+use ethers::types::{SignatureError, H160};
+use ethers::{
+    prelude::{Eip712, EthAbiType, U256},
+    types::Address,
+};
 use pmtree::Hasher;
 use rln::circuit::Fr;
 use serde::{Deserialize, Serialize};
@@ -16,18 +19,39 @@ use super::RichTransaction;
 //
 // MultiCoinSend is the succinct representation of the transactions that
 // is signed by the spender.
-#[derive(Debug, InputObject, Serialize, Deserialize, Eip712, EthAbiType, Clone)]
-#[eip712(
-    name = "ArcPay",
-    version = "0",
-    chain_id = 11155111,
-    verifying_contract = "0x21843937646d779e1e27a5f94ff5972f80c942bd"
-)]
+#[derive(Debug, InputObject, Serialize, Deserialize)]
 pub struct MultiCoinSend {
     receiver: [u8; 20],
     amount: u64,
     fee: u64,
     detail: [u8; 32],
+}
+
+impl MultiCoinSend {
+    // Required to convert from a type that works with graphql to a type where a signature can be recovered
+    fn encode_as_signable(&self) -> MultiCoinSend712 {
+        let receiver: Address = self.receiver.into();
+        MultiCoinSend712 {
+            receiver,
+            amount: self.amount.into(),
+            fee: self.fee.into(),
+            detail: self.detail.into(),
+        }
+    }
+}
+
+#[derive(Eip712, EthAbiType, Clone, Debug)]
+#[eip712(
+    name = "ArcPay",
+    version = "0",
+    chain_id = 11155111,
+    verifying_contract = "0x21843937646d779E1e27A5f94fF5972F80C942bD"
+)]
+pub struct MultiCoinSend712 {
+    receiver: Address,
+    amount: U256,
+    fee: U256,
+    detail: U256,
 }
 
 // A SignedMultiCoinSend is a full representation of the multi coin send with
@@ -44,10 +68,10 @@ pub struct SignedMultiCoinSend {
 #[derive(Debug)]
 pub enum MultiSendAuthorizationError {
     WrongHash { claimed: Fr, actual: Fr },
-    EIP712Error(<MultiCoinSend as ethers::types::transaction::eip712::Eip712>::Error),
+    EIP712Error(<MultiCoinSend712 as ethers::types::transaction::eip712::Eip712>::Error),
     InvalidSignature(SignatureError),
     InvalidChildTransaction(PrimitiveTransactionError),
-    WrongSender { signer: [u8; 20], sender: [u8; 20] },
+    WrongSender { signer: H160, sender: H160 },
     DifferentReceivers([u8; 20], [u8; 20]),
     SpendMismatch { claimed: u64, actual: u64 },
     FeeMismatch { claimed: u64, actual: u64 },
@@ -74,7 +98,7 @@ impl RichTransaction for SignedMultiCoinSend {
         }
 
         // Check the signature
-        let msg_hash = match self.summary.encode_eip712() {
+        let msg_hash = match self.summary.encode_as_signable().encode_eip712() {
             Ok(m) => m,
             Err(e) => return Err(MultiSendAuthorizationError::EIP712Error(e)),
         };
@@ -93,11 +117,11 @@ impl RichTransaction for SignedMultiCoinSend {
             }
 
             // Ensure that the sender of every child transaction is the signer
-            let signer_bytes: [u8; 20] = signer.into();
-            if child.sender() != signer_bytes {
+            let child_sender: H160 = child.sender().into();
+            if child_sender != signer {
                 return Err(MultiSendAuthorizationError::WrongSender {
-                    signer: signer_bytes,
-                    sender: child.sender(),
+                    signer,
+                    sender: child_sender,
                 });
             }
 
@@ -132,7 +156,7 @@ impl RichTransaction for SignedMultiCoinSend {
             },
         );
         if sum != self.summary.fee {
-            return Err(MultiSendAuthorizationError::SpendMismatch {
+            return Err(MultiSendAuthorizationError::FeeMismatch {
                 claimed: self.summary.fee,
                 actual: sum,
             });
