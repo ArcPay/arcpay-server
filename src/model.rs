@@ -18,6 +18,9 @@ use crate::{
     },
     ApiContext, QueueMessage, QUEUE_NAME,
 };
+use ethers::types::transaction::eip712::Eip712;
+
+use ethers::prelude::{Eip712, EthAbiType};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub(crate) struct QueryRoot;
@@ -32,7 +35,22 @@ impl QueryRoot {
     }
 
     // TODO: add some authentication for user privacy, maybe a signature.
-    async fn get_ownership_proofs(&self, ctx: &Context<'_>, address: [u8; 20]) -> Vec<CoinRange> {
+    async fn get_ownership_proofs(
+        &self,
+        ctx: &Context<'_>,
+        address: [u8; 20],
+        sig: Signature,
+        expiry: String,
+    ) -> Vec<CoinRange> {
+        let msg = Login712 { expiry };
+
+        let msg_hash = msg.encode_eip712().unwrap();
+
+        let ethsig = ethers::prelude::Signature::from(sig);
+        let signer = ethsig.recover(msg_hash).unwrap();
+        assert_eq!(signer, address.into());
+        // TODO: check expiry time
+
         let merkle_db = &ctx.data_unchecked::<ApiContext>().mt.read().await.db;
         merkle_db.get_for_address(&address).await
     }
@@ -44,6 +62,17 @@ impl QueryRoot {
             .await
             .unwrap()
     }
+}
+
+#[derive(Eip712, EthAbiType, Clone, Debug)]
+#[eip712(
+    name = "ArcPay",
+    version = "0",
+    chain_id = 11155111,
+    verifying_contract = "0x21843937646d779E1e27A5f94fF5972F80C942bD"
+)]
+struct Login712 {
+    expiry: String,
 }
 
 pub(crate) struct MutationRoot;

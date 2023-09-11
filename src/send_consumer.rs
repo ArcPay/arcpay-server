@@ -26,7 +26,7 @@ use crate::{
     name = "ArcPay",
     version = "0",
     chain_id = 11155111,
-    verifying_contract = "0x82B766D0a234489a299BBdA3DBe6ba206d77D35F"
+    verifying_contract = "0x21843937646d779E1e27A5f94fF5972F80C942bD"
 )]
 struct Send712 {
     owner: Address,
