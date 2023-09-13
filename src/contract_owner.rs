@@ -33,6 +33,7 @@ impl ContractOwner {
         let tx = self.contract.update_state(state_root, mint_time);
         let pending_tx = tx.send().await?;
         let _mined_tx = pending_tx.await?;
+        dbg!(&_mined_tx);
         // TODO change to below before launch. This waits for 3 blocks.
         // This slows down manual testing.
         // let _mined_tx = pending_tx.confirmations(3).await?;
