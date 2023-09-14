@@ -1,7 +1,5 @@
-use ethers::abi::{encode, Token};
-use ethers::types::transaction::eip712::{EIP712Domain, Eip712};
+use ethers::types::transaction::eip712::Eip712;
 
-use ethers::utils::keccak256;
 use ethers::{
     prelude::{Eip712, EthAbiType, U256},
     types::Address,
@@ -37,74 +35,6 @@ struct Send712 {
     highest_coin_to_send: U256,
     receiver: Address,
 }
-
-////// remove this debug trait //////
-// trait TraitName {
-//     // Compute the domain separator;
-//     // See: https://github.com/gakonst/ethers-rs/blob/master/examples/permit_hash.rs#L41
-//     fn separato(&self) -> [u8; 32];
-// }
-
-// impl TraitName for EIP712Domain {
-//     // Compute the domain separator;
-//     // See: https://github.com/gakonst/ethers-rs/blob/master/examples/permit_hash.rs#L41
-//     fn separato(&self) -> [u8; 32] {
-//         // full name is `EIP712Domain(string name,string version,uint256 chainId,address
-//         // verifyingContract,bytes32 salt)`
-//         let mut ty = "EIP712Domain(".to_string();
-
-//         let mut tokens = Vec::new();
-//         let mut needs_comma = false;
-//         if let Some(ref name) = self.name {
-//             ty += "string name";
-//             tokens.push(Token::Uint(U256::from(keccak256(name))));
-//             needs_comma = true;
-//         }
-
-//         if let Some(ref version) = self.version {
-//             if needs_comma {
-//                 ty.push(',');
-//             }
-//             ty += "string version";
-//             tokens.push(Token::Uint(U256::from(keccak256(version))));
-//             needs_comma = true;
-//         }
-
-//         if let Some(chain_id) = self.chain_id {
-//             if needs_comma {
-//                 ty.push(',');
-//             }
-//             ty += "uint256 chainId";
-//             tokens.push(Token::Uint(chain_id));
-//             needs_comma = true;
-//         }
-
-//         if let Some(verifying_contract) = self.verifying_contract {
-//             if needs_comma {
-//                 ty.push(',');
-//             }
-//             ty += "address verifyingContract";
-//             tokens.push(Token::Address(verifying_contract));
-//             needs_comma = true;
-//         }
-
-//         if let Some(salt) = self.salt {
-//             if needs_comma {
-//                 ty.push(',');
-//             }
-//             ty += "bytes32 salt";
-//             tokens.push(Token::Uint(U256::from(salt)));
-//         }
-
-//         ty.push(')');
-
-//         tokens.insert(0, Token::Uint(U256::from(keccak256(ty))));
-//         dbg!(&tokens);
-//         dbg!(&encode(&tokens));
-//         keccak256(encode(&tokens))
-//     }
-// }
-///////////////////////////
 
 /// Verify signature and public key in `sig` is correct.
 pub(crate) fn verify_ecdsa(

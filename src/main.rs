@@ -4,7 +4,7 @@ use ethers::prelude::*;
 use axum::{extract::Extension, routing::get, Router, Server};
 use lapin::Channel;
 use serde::{Deserialize, Serialize};
-use tokio_postgres::NoTls;
+use tokio_postgres::{IsolationLevel, NoTls};
 use tower_http::cors::{Any, CorsLayer};
 use user_balance::UserBalanceConfig;
 
@@ -38,9 +38,6 @@ struct Cli {
     /// Create or load a merkle tree
     #[arg(long)]
     merkle: MerkleCommand,
-    // Activates the mint pipeline
-    // #[arg(long, action=clap::ArgAction::SetTrue)]
-    // mint: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone)]
@@ -120,7 +117,6 @@ async fn main() -> Result<()> {
     let mut handles = vec![];
     let channel = Arc::new(channel);
 
-    // if let Some(t) = cli.merkle {
     //////////////// experimental GraphQL integration /////////////////
     let (client, connection) =
         tokio_postgres::connect("host=localhost user=dev dbname=arcpay", NoTls).await?;
@@ -141,30 +137,55 @@ async fn main() -> Result<()> {
         pre_image_table: "pre_image".to_string(),
     };
 
-    let (proven_client, proven_connection) =
-        tokio_postgres::connect("host=localhost user=dev dbname=proven_arcpay", NoTls).await?;
-
-    // The connection object performs the actual communication with the database,
-    // so spawn it off to run on its own.
-    tokio::spawn(async move {
-        if let Err(e) = proven_connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
-
-    let proven_client = Arc::new(RwLock::new(proven_client));
-
     let proven_db_config = PostgresDBConfig {
-        client: proven_client,
-        merkle_table: "merkle".to_string(),
-        pre_image_table: "pre_image".to_string(),
+        client: client.clone(),
+        merkle_table: "proven_merkle".to_string(),
+        pre_image_table: "proven_pre_image".to_string(),
     };
 
     let mt = match cli.merkle {
-        MerkleCommand::New => (
-            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config).await?,
-            MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, proven_db_config).await?,
-        ),
+        MerkleCommand::New => {
+            let mut client = client.write().await;
+            let tx = client
+                .build_transaction()
+                .isolation_level(IsolationLevel::Serializable)
+                .start()
+                .await
+                .expect("Database::new message queue build_transaction.start() error");
+
+            // TODO remove drop
+            let query: String = format!(
+                "DROP TABLE IF EXISTS {queue_table};",
+                queue_table = QUEUE_NAME
+            );
+
+            let statement = tx.prepare(&query).await.unwrap();
+            tx.execute(&statement, &[]).await.unwrap();
+
+            let query = format!(
+                "CREATE TABLE {queue_table} (
+                    id SERIAL PRIMARY KEY,
+                    payload BYTEA NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                );",
+                queue_table = QUEUE_NAME
+            );
+
+            let statement = tx.prepare(&query).await.unwrap();
+            tx.execute(&statement, &[]).await.unwrap();
+
+            tx.commit()
+                .await
+                .expect("Database::new message queue create table error");
+
+            (
+                MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, db_config).await?,
+                MerkleTree::<PostgresDBConfig, MyPoseidon>::new(MERKLE_DEPTH, proven_db_config)
+                    .await?,
+            )
+        }
         MerkleCommand::Load => (
             MerkleTree::<PostgresDBConfig, MyPoseidon>::load(db_config).await?,
             MerkleTree::<PostgresDBConfig, MyPoseidon>::load(proven_db_config).await?,
@@ -204,9 +225,7 @@ async fn main() -> Result<()> {
             .await
             .unwrap()
     }));
-    // }
 
-    // if cli.mint {
     let provider = Arc::new(Provider::<Http>::try_from("https://rpc2.sepolia.org")?);
 
     let contract_address: H160 = ARCPAY_ADDRESS.parse::<Address>().unwrap();
