@@ -6,7 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-pmtree = { git = "https://github.com/arcpay/pmtree", rev = "577f222fd22d68ea33c3903d7eaf19f9ea24083e" }
+#pmtree = { git = "https://github.com/arcpay/pmtree", rev = "577f222fd22d68ea33c3903d7eaf19f9ea24083e" }
+pmtree = { path = "../pmtree" }
 utils = { git = "https://github.com/vacp2p/zerokit.git", rev = "be88a432d7ac58d02371025f909ba087d0a013c0" }
 rln = { git = "https://github.com/vacp2p/zerokit.git", rev = "be88a432d7ac58d02371025f909ba087d0a013c0" }
 async-graphql = "5.0.10"

@@ -13,7 +13,7 @@ use crate::{
 
 pub(crate) async fn mint(
     contract: arc_pay_contract::ArcPayContract<Provider<Http>>,
-    channel: Arc<Channel>,
+    channel: Arc<RwLock<tokio_postgres::Client>>,
     mt: Arc<RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>>,
 ) {
     dbg!("inmint");

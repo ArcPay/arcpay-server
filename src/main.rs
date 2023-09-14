@@ -2,7 +2,6 @@ use async_graphql::{EmptySubscription, Schema};
 use ethers::prelude::*;
 
 use axum::{extract::Extension, routing::get, Router, Server};
-use lapin::Channel;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::{IsolationLevel, NoTls};
 use tower_http::cors::{Any, CorsLayer};
@@ -11,8 +10,6 @@ use user_balance::UserBalanceConfig;
 use model::{Leaf, MutationRoot, SendMessageType, WithdrawMessageType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
 
 use clap::Parser;
 use eyre::Result; // TODO replace .unwrap() with `?` and `wrap_err` from eyre::Result.
@@ -49,7 +46,7 @@ enum MerkleCommand {
 struct ApiContext {
     user_balance_db: UserBalanceConfig,
     mt: Arc<RwLock<MerkleTree<PostgresDBConfig, MyPoseidon>>>,
-    channel: Arc<Channel>,
+    channel: Arc<RwLock<tokio_postgres::Client>>,
 }
 
 const MERKLE_DEPTH: usize = 32; // TODO: read in from parameters file
@@ -73,49 +70,8 @@ enum QueueMessage {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //////////////// experimental RabbitMQ integration ////////////////
-    // Connect to the RabbitMQ server
-    let addr = "amqp://guest:guest@localhost:5672/%2f";
-    let conn = Connection::connect(addr, ConnectionProperties::default()).await?;
-
-    // Create a channel
-    let channel = conn.create_channel().await?;
-
-    // TODO: declare queue as persistent through `QueueDeclareOptions`. See message durability section:
-    // https://www.rabbitmq.com/tutorials/tutorial-two-python.html.
-    // Also make messages persistent by updating publisher. The value `PERSISTENT_DELIVERY_MODE` is 2,
-    // see: https://pika.readthedocs.io/en/stable/_modules/pika/spec.html.
-    // Even this doesn't fully guarantee message persistence, see "Note on message persistence"
-    // in the tutorial which links to: https://www.rabbitmq.com/confirms.html#publisher-confirms.
-    // We have enabled publisher confirms in the next step.
-    channel
-        .queue_declare(
-            QUEUE_NAME,
-            QueueDeclareOptions::default(),
-            FieldTable::default(),
-        )
-        .await?;
-    // Enable publisher confirms
-    channel
-        .confirm_select(ConfirmSelectOptions::default())
-        .await?;
-
-    // Consume messages from the queue
-    let consumer = channel
-        .basic_consume(
-            QUEUE_NAME,
-            "my_consumer",
-            BasicConsumeOptions::default(),
-            FieldTable::default(),
-        )
-        .await
-        .expect("basic_consume");
-
-    println!("Waiting for messages...");
-
     let cli = Cli::parse();
     let mut handles = vec![];
-    let channel = Arc::new(channel);
 
     //////////////// experimental GraphQL integration /////////////////
     let (client, connection) =
@@ -193,7 +149,7 @@ async fn main() -> Result<()> {
     };
 
     handles.push(tokio::spawn(async move {
-        send_consumer::send_consumer(consumer, RwLock::new(mt.1)).await
+        send_consumer::send_consumer(client.clone(), RwLock::new(mt.1)).await
     }));
 
     let user_balance_db = UserBalanceConfig {
@@ -206,7 +162,7 @@ async fn main() -> Result<()> {
         .data(ApiContext {
             user_balance_db,
             mt: cur_merkle_tree.clone(),
-            channel: channel.clone(),
+            channel: client.clone(),
         })
         .finish();
     let cors = CorsLayer::new()
@@ -243,7 +199,7 @@ async fn main() -> Result<()> {
     let filter = event.filter.from_block(0).to_block(BlockNumber::Finalized);
     */
     handles.push(tokio::spawn(async move {
-        mint(contract, channel.clone(), cur_merkle_tree.clone()).await
+        mint(contract, client.clone(), cur_merkle_tree.clone()).await
     }));
     // }
 

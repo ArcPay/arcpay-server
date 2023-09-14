@@ -11,7 +11,7 @@ use rln::{
 };
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-use tokio_postgres::{Client, IsolationLevel};
+use tokio_postgres::{Client, IsolationLevel, Transaction};
 
 use crate::model::{CoinRange, Leaf};
 
@@ -196,6 +196,7 @@ impl Database for PostgresDBConfig {
         key: DBKey,
         value: Value,
         pre_image: Option<Self::PreImage>,
+        tx: &Transaction<'_>,
     ) -> PmtreeResult<()> {
         match pre_image {
             Some(t) => {
@@ -223,12 +224,12 @@ impl Database for PostgresDBConfig {
 
                 let mut client = self.client.write().await;
 
-                let tx = client
-                    .build_transaction()
-                    .isolation_level(IsolationLevel::Serializable)
-                    .start()
-                    .await
-                    .expect("Database::put_with_pre_image build_transaction error");
+                // let tx = client
+                //     .build_transaction()
+                //     .isolation_level(IsolationLevel::Serializable)
+                //     .start()
+                //     .await
+                //     .expect("Database::put_with_pre_image build_transaction error");
 
                 // If `key` already exists in the table, update `leaf` column.
                 let query = format!(

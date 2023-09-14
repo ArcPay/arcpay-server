@@ -1,4 +1,4 @@
-use ethers::types::Address;
+use ethers::types::{Address, Transaction};
 use tokio::sync::RwLockWriteGuard;
 
 use async_graphql::{Context, EmptySubscription, InputObject, Object, Schema, SimpleObject};
@@ -7,6 +7,7 @@ use pmtree::{Hasher, MerkleTree};
 use rln::circuit::Fr;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::serde_as;
+use tokio_postgres::IsolationLevel;
 
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
@@ -134,6 +135,7 @@ fn to_my_fr(from: Vec<(Fr, u8)>) -> Vec<(MyFr, u8)> {
 pub(crate) async fn mint_in_merkle(
     mt: &mut RwLockWriteGuard<'_, MerkleTree<PostgresDBConfig, MyPoseidon>>,
     leaf: Leaf,
+    tx: &tokio_postgres::Transaction<'_>,
 ) -> MerkleInfo {
     assert!(leaf.low_coin <= leaf.high_coin);
 
@@ -142,7 +144,7 @@ pub(crate) async fn mint_in_merkle(
         Fr::from(leaf.low_coin),
         Fr::from(leaf.high_coin),
     ]);
-    mt.update_next(hash, Some(leaf)).await.unwrap();
+    mt.update_next(hash, Some(leaf), tx).await.unwrap();
     MerkleInfo {
         root: MyPoseidon::serialize(mt.root()),
         leaf: MyPoseidon::serialize(hash),
@@ -156,6 +158,7 @@ pub(crate) async fn send_in_merkle(
     highest_coin_to_send: u64,
     recipient: &[u8; 20],
     is_return_proof: bool,
+    tx: &tokio_postgres::Transaction<'_>,
 ) -> Option<[Vec<(MyFr, u8)>; 3]> {
     assert!(
         leaf.low_coin <= highest_coin_to_send && highest_coin_to_send <= leaf.high_coin,
@@ -187,7 +190,7 @@ pub(crate) async fn send_in_merkle(
         proofs[0] = from_proof;
     }
     match highest_coin_to_send == leaf.high_coin {
-        true => mt.set(index as usize, MyPoseidon::default_leaf(), None),
+        true => mt.set(index as usize, MyPoseidon::default_leaf(), None, tx),
         false => mt.set(
             index as usize,
             MyPoseidon::hash(&[
@@ -200,6 +203,7 @@ pub(crate) async fn send_in_merkle(
                 low_coin: highest_coin_to_send + 1,
                 high_coin: leaf.high_coin,
             }),
+            tx,
         ),
     }
     .await
@@ -219,6 +223,7 @@ pub(crate) async fn send_in_merkle(
             low_coin: leaf.low_coin,
             high_coin: highest_coin_to_send,
         }),
+        tx,
     )
     .await
     .unwrap();
@@ -245,6 +250,13 @@ impl MutationRoot {
     ) -> Vec<u8> {
         let api_context = ctx.data_unchecked::<ApiContext>();
         let mut mt = api_context.mt.write().await;
+        let client = mt.db.client.write().await;
+        let tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::Serializable)
+            .start()
+            .await
+            .expect("Database::put_with_pre_image build_transaction error");
 
         multi_coin_tx.authorized().unwrap();
 
@@ -268,6 +280,7 @@ impl MutationRoot {
                 highest_coin_to_send,
                 &recipient,
                 true,
+                &tx,
             )
             .await
             .ok_or("proofs should be returned")
@@ -286,6 +299,9 @@ impl MutationRoot {
                 proofs,
             )))
             .expect("unsafe_send: queue message should be serialized");
+
+            let client = api_context.channel.write().await;
+            // .execute("INSERT INTO message_queue (payload) VALUES ($1)", &[&data]).await.unwrap();
 
             let confirm = channel
                 .basic_publish(
@@ -328,6 +344,13 @@ impl MutationRoot {
         let mut mt = api_context.mt.write().await;
 
         verify_ecdsa(&leaf, highest_coin_to_send, &recipient, sig);
+        let client = mt.db.client.write().await;
+        let tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::Serializable)
+            .start()
+            .await
+            .expect("Database::put_with_pre_image build_transaction error");
         let proofs = send_in_merkle(
             &mut mt,
             index,
@@ -335,6 +358,7 @@ impl MutationRoot {
             highest_coin_to_send,
             &recipient,
             true,
+            &tx,
         )
         .await
         .ok_or("proofs should be returned")
@@ -401,7 +425,16 @@ impl MutationRoot {
             ])
         );
 
-        mt.set(index as usize, MyPoseidon::default_leaf(), None)
+        let client = mt.db.client.write().await;
+
+        let tx = client
+            .build_transaction()
+            .isolation_level(IsolationLevel::Serializable)
+            .start()
+            .await
+            .expect("Database::put_with_pre_image build_transaction error");
+
+        mt.set(index as usize, MyPoseidon::default_leaf(), None, &tx)
             .await
             .unwrap();
 

@@ -4,8 +4,7 @@ use ethers::{
     prelude::{Eip712, EthAbiType, U256},
     types::Address,
 };
-use futures_lite::stream::StreamExt;
-use lapin::{options::BasicAckOptions, Consumer};
+use lapin::options::BasicAckOptions;
 use pmtree::Hasher;
 
 use tokio::sync::RwLock;
@@ -19,6 +18,7 @@ use crate::{
 };
 use crate::{QueueMessage, MAX_SINCE_LAST_PROVE};
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Eip712, EthAbiType, Clone, Debug)]
@@ -67,7 +67,7 @@ pub(crate) fn verify_ecdsa(
 
 // Run this in a separate thread.
 pub(crate) async fn send_consumer(
-    mut consumer: Consumer,
+    mut consumer: Arc<RwLock<tokio_postgres::Client>>,
     mt: RwLock<pmtree::MerkleTree<PostgresDBConfig, MyPoseidon>>,
 ) {
     let mut mint_time: U256 = U256::default();
