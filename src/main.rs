@@ -63,7 +63,7 @@ const QUEUE_NAME: &str = "user_requests";
 /// Maximum time gap (in seconds) between two proof submissions.
 /// Note that it's not strict and depends on the number of requests.
 /// Set it half the max time set in the contract.
-const MAX_SINCE_LAST_PROVE: usize = 30; // TODO adjust based on traffic
+const MAX_SINCE_LAST_PROVE: u64 = 100; // TODO adjust based on traffic
 
 abigen!(ArcPayContract, "ArcPay.json");
 
