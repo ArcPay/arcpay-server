@@ -33,12 +33,12 @@ Resources:
   RDSInstance:
     Type: AWS::RDS::DBInstance
     Properties:
-      DBInstanceIdentifier: MyDB
+      DBInstanceIdentifier: ArcPayDB
       AllocatedStorage: '5'
       DBInstanceClass: db.t3.micro
       Engine: postgres
-      MasterUsername: admin
-      MasterUserPassword: password1234  # Please change to a more secure password
+      MasterUsername: blake
+      MasterUserPassword: password1234  # TODO: use a hidden parameter
 
   RabbitMQBroker:
     Type: "AWS::AmazonMQ::Broker"
@@ -53,8 +53,8 @@ Resources:
       Logs:
         General: true
       Users:
-      - Username: admin
-        Password: password1234  # Please change this to a more secure password
+      - Username: blake
+        Password: password1234  # TODO: use a hidden parameter
 
   RabbitMQSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -69,6 +69,6 @@ Resources:
   SecurityGroupEgress:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
-      GroupId: !Ref RabbitMQSecurityGroup
+      GroupId: !GetAtt RabbitMQSecurityGroup.GroupId
       IpProtocol: -1
       CidrIp: 0.0.0.0/0
