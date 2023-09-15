@@ -379,27 +379,16 @@ impl MutationRoot {
         )))
         .expect("unsafe_send: queue message should be serialized");
 
-        let confirm = channel
-            .basic_publish(
-                "",
-                QUEUE_NAME,
-                BasicPublishOptions {
-                    mandatory: true,
-                    ..BasicPublishOptions::default()
-                },
-                queue_message.as_slice(),
-                BasicProperties::default(),
-            )
-            .await
-            .expect("basic_publish")
-            .await
-            .expect("publisher-confirms");
+        let query = format!(
+            "INSERT INTO {message_queue} (payload) VALUES $1",
+            message_queue = QUEUE_NAME
+        );
 
-        assert!(confirm.is_ack());
-        // when `mandatory` is on, if the message is not sent to a queue for any reason
-        // (example, queues are full), the message is returned back.
-        // If the message isn't received back, then a queue has received the message.
-        assert_eq!(confirm.take_message(), None);
+        let statement = tx.prepare(&query).await.unwrap();
+        let rows_modified = tx.execute(&statement, &[&queue_message]).await.unwrap();
+        assert_eq!(rows_modified, 1, "should be only 1 new row");
+
+        tx.commit().await.unwrap();
 
         root
     }
