@@ -37,7 +37,7 @@ Resources:
       # IamInstanceProfile: !Ref EC2IAMInstanceProfile
       KeyName: !Ref SSHKeyPairKeyName # Dynamic input allows changing the value during stack creation without touching the template
       ImageId: ami-05552d2dcf89c9b24
-      InstanceType: t2.micro
+      InstanceType: t2.medium
       SecurityGroups:
         - !Ref EC2SecurityGroup
       UserData: !Base64 |
@@ -59,7 +59,8 @@ Resources:
   BackendEC2Instance:
     Type: AWS::EC2::Instance
     Properties:
-      InstanceType: t2.micro
+      KeyName: !Ref SSHKeyPairKeyName # Dynamic input allows changing the value during stack creation without touching the template
+      InstanceType: t2.medium
       ImageId: ami-05552d2dcf89c9b24
       SecurityGroups:
       - !Ref EC2SecurityGroup
