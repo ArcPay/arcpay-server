@@ -11,9 +11,8 @@ use serde_with::serde_as;
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
     send_consumer::verify_ecdsa,
-    transactions::primitive::PrimitiveTransaction,
     transactions::{
-        multicoin::{MultiCoinSend, SignedMultiCoinSend},
+        multicoin::{SignedMultiCoinSend},
         RichTransaction,
     },
     ApiContext, QueueMessage, QUEUE_NAME,

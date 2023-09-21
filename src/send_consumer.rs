@@ -1,7 +1,7 @@
-use ethers::abi::{encode, Token};
-use ethers::types::transaction::eip712::{EIP712Domain, Eip712};
 
-use ethers::utils::keccak256;
+use ethers::types::transaction::eip712::{Eip712};
+
+
 use ethers::{
     prelude::{Eip712, EthAbiType, U256},
     types::Address,
@@ -165,7 +165,7 @@ pub(crate) async fn send_consumer(
                 mint_in_merkle(&mut mt, leaf).await;
             }
             QueueMessage::Send(send) => {
-                let (leaf, index, highest_coin_to_send, recipient, proofs) = send;
+                let (leaf, index, highest_coin_to_send, recipient, _proofs) = send;
                 send_in_merkle(
                     &mut mt,
                     index as u64,
@@ -176,7 +176,7 @@ pub(crate) async fn send_consumer(
                 )
                 .await;
             }
-            QueueMessage::Withdraw((leaf, index)) => {
+            QueueMessage::Withdraw((_leaf, index)) => {
                 mt.set(index, MyPoseidon::default_leaf(), None)
                     .await
                     .unwrap();
