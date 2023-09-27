@@ -1,7 +1,7 @@
-use ethers::abi::{encode, Token};
-use ethers::types::transaction::eip712::{EIP712Domain, Eip712};
 
-use ethers::utils::keccak256;
+use ethers::types::transaction::eip712::{Eip712};
+
+
 use ethers::{
     prelude::{Eip712, EthAbiType, U256},
     types::Address,
@@ -13,20 +13,22 @@ use pmtree::Hasher;
 use tokio::sync::RwLock;
 use tokio_postgres::IsolationLevel;
 
-use crate::QueueMessage;
 use crate::{
     contract_owner::ContractOwner,
     merkle::{MyPoseidon, PostgresDBConfig},
     model::{mint_in_merkle, Leaf},
     model::{send_in_merkle, Signature},
 };
+use crate::{QueueMessage, MAX_SINCE_LAST_PROVE};
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Eip712, EthAbiType, Clone, Debug)]
 #[eip712(
     name = "ArcPay",
     version = "0",
     chain_id = 11155111,
-    verifying_contract = "0x82B766D0a234489a299BBdA3DBe6ba206d77D35F"
+    verifying_contract = "0x21843937646d779E1e27A5f94fF5972F80C942bD"
 )]
 struct Send712 {
     owner: Address,
@@ -140,6 +142,9 @@ pub(crate) async fn send_consumer(
 ) {
     let mut mint_time: U256 = U256::default();
     let arcpay_owner = ContractOwner::new().await.unwrap();
+
+    let mut last_finalize_time: u64 = 0;
+
     while let Some(delivery) = consumer.next().await {
         let delivery = delivery.expect("error in consumer");
         let mesg: QueueMessage = bincode::deserialize(delivery.data.as_slice())
@@ -160,7 +165,7 @@ pub(crate) async fn send_consumer(
                 mint_in_merkle(&mut mt, leaf).await;
             }
             QueueMessage::Send(send) => {
-                let (leaf, index, highest_coin_to_send, recipient, proofs) = send;
+                let (leaf, index, highest_coin_to_send, recipient, _proofs) = send;
                 send_in_merkle(
                     &mut mt,
                     index as u64,
@@ -171,7 +176,7 @@ pub(crate) async fn send_consumer(
                 )
                 .await;
             }
-            QueueMessage::Withdraw((leaf, index)) => {
+            QueueMessage::Withdraw((_leaf, index)) => {
                 mt.set(index, MyPoseidon::default_leaf(), None)
                     .await
                     .unwrap();
@@ -182,7 +187,12 @@ pub(crate) async fn send_consumer(
         // drop(mt);
         // Check now - last proof time > MAX_SINCE_LAST_PROOF.
         // If yes, prove the nova proof for groth16 and then issue the below transaction:
-        {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs();
+
+        if current_time - last_finalize_time > MAX_SINCE_LAST_PROVE {
             let state_root = U256::from_big_endian(&state_root);
 
             let state_root_updated = arcpay_owner.update_state_root(state_root, mint_time).await;
@@ -206,7 +216,6 @@ pub(crate) async fn send_consumer(
 
             // update the finalized merkle tree by copying the proven merkle dbs to finalized dbs.
             // may be optimized later once we have large tables.
-            /*
             {
                 let mut client = mt.db.client.write().await;
                 let tx = client
@@ -249,7 +258,8 @@ pub(crate) async fn send_consumer(
                 tx.execute(&statement, &[]).await.unwrap();
 
                 tx.commit().await.expect("fin::copy error");
-            } */
+                last_finalize_time = current_time;
+            }
         }
     }
 }

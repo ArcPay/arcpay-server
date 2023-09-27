@@ -11,8 +11,15 @@ use serde_with::serde_as;
 use crate::{
     merkle::{MyPoseidon, PostgresDBConfig},
     send_consumer::verify_ecdsa,
+    transactions::{
+        multicoin::{SignedMultiCoinSend},
+        RichTransaction,
+    },
     ApiContext, QueueMessage, QUEUE_NAME,
 };
+use ethers::types::transaction::eip712::Eip712;
+
+use ethers::prelude::{Eip712, EthAbiType};
 pub(crate) type ServiceSchema = Schema<QueryRoot, MutationRoot, EmptySubscription>;
 
 pub(crate) struct QueryRoot;
@@ -27,7 +34,22 @@ impl QueryRoot {
     }
 
     // TODO: add some authentication for user privacy, maybe a signature.
-    async fn get_ownership_proofs(&self, ctx: &Context<'_>, address: [u8; 20]) -> Vec<CoinRange> {
+    async fn get_ownership_proofs(
+        &self,
+        ctx: &Context<'_>,
+        address: [u8; 20],
+        sig: Signature,
+        expiry: String,
+    ) -> Vec<CoinRange> {
+        let msg = Login712 { expiry };
+
+        let msg_hash = msg.encode_eip712().unwrap();
+
+        let ethsig = ethers::prelude::Signature::from(sig);
+        let signer = ethsig.recover(msg_hash).unwrap();
+        assert_eq!(signer, address.into());
+        // TODO: check expiry time
+
         let merkle_db = &ctx.data_unchecked::<ApiContext>().mt.read().await.db;
         merkle_db.get_for_address(&address).await
     }
@@ -39,6 +61,17 @@ impl QueryRoot {
             .await
             .unwrap()
     }
+}
+
+#[derive(Eip712, EthAbiType, Clone, Debug)]
+#[eip712(
+    name = "ArcPay",
+    version = "0",
+    chain_id = 11155111,
+    verifying_contract = "0x21843937646d779E1e27A5f94fF5972F80C942bD"
+)]
+struct Login712 {
+    expiry: String,
 }
 
 pub(crate) struct MutationRoot;
@@ -61,7 +94,7 @@ pub(crate) struct CoinRange {
 
 // `serde` crate can't serialize large arrays, hence using specially designed `serde_with`.
 #[serde_as]
-#[derive(Debug, InputObject, Serialize, Deserialize)]
+#[derive(Debug, InputObject, Serialize, Deserialize, Clone)]
 pub(crate) struct Signature {
     #[serde_as(as = "[_; 32]")]
     pub r: [u8; 32],
@@ -181,7 +214,7 @@ pub(crate) async fn send_in_merkle(
         let from_proof = to_my_fr(mt.proof(index as usize).await.unwrap().0);
         proofs[0] = from_proof;
     }
-    match highest_coin_to_send == leaf.low_coin {
+    match highest_coin_to_send == leaf.high_coin {
         true => mt.set(index as usize, MyPoseidon::default_leaf(), None),
         false => mt.set(
             index as usize,
@@ -233,6 +266,81 @@ pub(crate) async fn send_in_merkle(
 
 #[Object]
 impl MutationRoot {
+    async fn multi_coin_send(
+        &self,
+        ctx: &Context<'_>,
+        multi_coin_tx: SignedMultiCoinSend,
+    ) -> Vec<u8> {
+        let api_context = ctx.data_unchecked::<ApiContext>();
+        let mut mt = api_context.mt.write().await;
+
+        multi_coin_tx.authorized().unwrap();
+
+        let components = multi_coin_tx.decompose();
+
+        let mut root = vec![];
+        for primitive_tx in components.iter() {
+            let index = primitive_tx.leaf_id();
+            let leaf = Leaf {
+                address: primitive_tx.sender(),
+                low_coin: primitive_tx.low_coin(),
+                high_coin: primitive_tx.high_coin(),
+            };
+            let highest_coin_to_send = primitive_tx.fee_upper_bound() - 1; // TODO: move everything to fee upper bound
+            let recipient = primitive_tx.receiver();
+
+            let proofs = send_in_merkle(
+                &mut mt,
+                index,
+                &leaf,
+                highest_coin_to_send,
+                &recipient,
+                true,
+            )
+            .await
+            .ok_or("proofs should be returned")
+            .unwrap();
+
+            root = MyPoseidon::serialize(mt.root());
+
+            // Queue the send request to be received by ZK prover at the other end.
+            let channel = &api_context.channel;
+
+            let queue_message = bincode::serialize(&QueueMessage::Send((
+                leaf,
+                index as usize,
+                highest_coin_to_send,
+                recipient,
+                proofs,
+            )))
+            .expect("unsafe_send: queue message should be serialized");
+
+            let confirm = channel
+                .basic_publish(
+                    "",
+                    QUEUE_NAME,
+                    BasicPublishOptions {
+                        mandatory: true,
+                        ..BasicPublishOptions::default()
+                    },
+                    queue_message.as_slice(),
+                    BasicProperties::default(),
+                )
+                .await
+                .expect("basic_publish")
+                .await
+                .expect("publisher-confirms");
+
+            assert!(confirm.is_ack());
+            // when `mandatory` is on, if the message is not sent to a queue for any reason
+            // (example, queues are full), the message is returned back.
+            // If the message isn't received back, then a queue has received the message.
+            assert_eq!(confirm.take_message(), None);
+        }
+
+        root
+    }
+
     /// Send coins `[leaf.low_coin, highest_coin_to_send]` to `receiver` from `leaf`.
     /// The send should be authorized by `leaf.address` through ECDSA signature `sig`.
     async fn unsafe_send(

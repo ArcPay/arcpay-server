@@ -1,0 +1,245 @@
+#          Codedeploy Parameters
+# _______________________________________
+# CodeDeploy and CodeBuild settings largely copied from https://rrawat.com/blog/aws-cloudformation-cicd-nodejs
+# TODO: separate into separate nested stacks for clarity
+Parameters:
+  SSHKeyPairKeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: This secure string parameter holds our application password
+    Default: NodejsDeploymentKeyPair
+
+#          Main Infrastructure
+# _______________________________________
+Resources:
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP and HTTPS access
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0 # SSH access from everywhere shouldn't be allowed. TODO: use AWS Systems Manager Session Manager or similar instead of SSH
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '443'
+        ToPort: '443'
+        CidrIp: 0.0.0.0/0
+
+  FrontendEC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - EC2SecurityGroup
+    Properties:
+      # IamInstanceProfile: !Ref EC2IAMInstanceProfile
+      KeyName: !Ref SSHKeyPairKeyName # Dynamic input allows changing the value during stack creation without touching the template
+      ImageId: ami-05552d2dcf89c9b24
+      InstanceType: t2.medium
+      SecurityGroups:
+        - !Ref EC2SecurityGroup
+      UserData: !Base64 |
+        #!/bin/bash -xe
+        sudo yum update -y
+        curl -sL https://rpm.nodesource.com/setup_16.x | sudo bash -
+        sudo yum install -y ruby wget nodejs
+        wget https://aws-codedeploy-eu-west-1.s3.eu-west-1.amazonaws.com/latest/install
+        chmod +x ./install
+        sudo ./install auto
+        node -e "console.log('Running Node.js ' + process.version)"
+        npm i pm2 -g
+      Tags: # CodeDeploy uses these tags to find instances to deploy our changes
+        - Key: environment
+          Value: development
+        - Key: name
+          Value: webserver
+
+  BackendEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: !Ref SSHKeyPairKeyName # Dynamic input allows changing the value during stack creation without touching the template
+      InstanceType: t2.medium
+      ImageId: ami-05552d2dcf89c9b24
+      SecurityGroups:
+      - !Ref EC2SecurityGroup
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: ArcPayDB
+      AllocatedStorage: '5'
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      MasterUsername: blake
+      MasterUserPassword: password1234  # TODO: use a hidden parameter
+
+  RabbitMQBroker:
+    Type: "AWS::AmazonMQ::Broker"
+    Properties:
+      BrokerName: MyRabbitMQBroker
+      EngineType: RABBITMQ
+      EngineVersion: '3.8.6' # You can set this to your desired version
+      DeploymentMode: SINGLE_INSTANCE # For cost saving, but consider CLUSTER for production
+      HostInstanceType: mq.t3.micro
+      PubliclyAccessible: true
+      AutoMinorVersionUpgrade: true
+      Logs:
+        General: true
+      Users:
+      - Username: blake
+        Password: password1234  # TODO: use a hidden parameter
+
+  RabbitMQSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable RabbitMQ access
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '5672'
+        ToPort: '5672'
+        CidrIp: 0.0.0.0/0
+
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt RabbitMQSecurityGroup.GroupId
+      IpProtocol: -1
+      CidrIp: 0.0.0.0/0
+
+  # #           Codebuild resources
+  # # _______________________________________
+  # BuildArtifactS3Bucket:
+  #   Type: AWS::S3::Bucket
+  #   Properties:
+  #     AccessControl: Private
+  #     BucketName: arcpay-frontend-cfn-codebuild-artifacts
+  #     VersioningConfiguration:
+  #       Status: Enabled
+
+  # IAMRoleForCodeBuild:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     Path: /
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Action: ['sts:AssumeRole']
+  #           Effect: Allow
+  #           Principal:
+  #             Service: [codebuild.amazonaws.com]
+  #     Policies:
+  #       - PolicyName: "CodeBuildAccess"
+  #         PolicyDocument:
+  #           Version: "2012-10-17"
+  #           Statement:
+  #             - Action:
+  #               - 'ssm:GetParameters'
+  #               - 'logs:*'
+  #               - 's3:*'
+  #               - 'codedeploy:*'
+  #               Effect: "Allow"
+  #               Resource: "*"
+
+  # CodeBuildProject:
+  #   Type: AWS::CodeBuild::Project
+  #   DependsOn:
+  #     - BuildArtifactS3Bucket
+  #     - IAMRoleForCodeBuild
+  #   Properties:
+  #     ServiceRole: !GetAtt IAMRoleForCodeBuild.Arn
+  #     Artifacts:
+  #       Type: S3
+  #       Location: arcpay-frontend-cfn-codebuild-artifacts
+  #       Name: buildArtifact.zip
+  #       Packaging: ZIP
+  #       Path: deploy-nodejs-cicd
+  #     Environment:
+  #       Type: LINUX_CONTAINER
+  #       ComputeType: BUILD_GENERAL1_SMALL
+  #       Image: aws/codebuild/standard:6.0
+  #       EnvironmentVariables:
+  #         - Name: PASSWORD
+  #           Value: /Production/AppPassword
+  #           Type: PARAMETER_STORE
+  #     Source:
+  #       Type: GITHUB
+  #       Location: https://github.com/arcpay/demo.git
+  #       Auth:
+  #         Type: OAUTH
+  #     SourceVersion: cloudformation
+  #     Triggers:
+  #       Webhook: true # docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-codebuild-project-webhookfilter.html
+
+  # #          Codedeploy resources
+  # # _______________________________________
+  # CodeRevisionS3Bucket:
+  #   Type: AWS::S3::Bucket
+  #   Properties:
+  #     AccessControl: Private
+  #     BucketName: arcpay-frontend-cfn-codedeploy-revisions
+  #     VersioningConfiguration:
+  #       Status: Enabled
+
+  # EC2IAMRoleForCodeDeploy:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     Path: /
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Action: ['sts:AssumeRole']
+  #           Effect: Allow
+  #           Principal:
+  #             Service: [ec2.amazonaws.com]
+  #     Policies:
+  #       - PolicyName: "CodeDeployAccess"
+  #         PolicyDocument:
+  #           Version: "2012-10-17"
+  #           Statement:
+  #             - Action:
+  #               - 's3:*'
+  #               - 's3-object-lambda:*'
+  #               Effect: "Allow"
+  #               Resource: "arn:aws:s3:::arcpay-frontend-cfn-codedeploy-revisions/*"
+
+  # EC2IAMInstanceProfile:
+  #   Type: AWS::IAM::InstanceProfile
+  #   Properties:
+  #     Path: /
+  #     Roles:
+  #       - !Ref EC2IAMRoleForCodeDeploy
+
+  # CodeDeployServiceRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     Path: /
+  #     ManagedPolicyArns:
+  #       - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Action: ['sts:AssumeRole']
+  #           Effect: Allow
+  #           Principal:
+  #             Service: [codedeploy.amazonaws.com]
+
+  # CodeDeployApplication:
+  #   Type: AWS::CodeDeploy::Application
+  #   DependsOn: FrontendEC2Instance
+  #   Properties:
+  #     ApplicationName: arcpay-frontend-cfn-codedeploy-application
+
+  # CodeDeployDeploymentGroup:
+  #   Type: AWS::CodeDeploy::DeploymentGroup
+  #   DependsOn: CodeDeployApplication
+  #   Properties:
+  #     ApplicationName: arcpay-frontend-cfn-codedeploy-application
+  #     ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+  #     Ec2TagFilters:
+  #       - Key: environment
+  #         Type: KEY_AND_VALUE
+  #         Value: development
+  #     DeploymentGroupName: development
+  #     DeploymentConfigName: CodeDeployDefault.OneAtATime
